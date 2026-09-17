@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+FortiClient VPN Manager - Interface Gráfica para Ubuntu
+Gateway: 198.51.100.100 (IP Privado) | IP Local: 203.0.113.7 | IP Virtual Dinâmico (0.0.0.0)
+"""
+
+import tkinter as tk
+from tkinter import ttk, messagebox
+import subprocess
+import threading
+import time
+import webbrowser
+import re
+import os
+
+CONF_FILE = "/etc/swanctl/conf.d/forti.conf"
+CHILD_NAME = "forticlient"
+WEB_URL = "https://10.64.10.1:6464/login?redir=%2F"
+
+class VpnApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("FortiClient VPN - DTIC / PRODEPA")
+        self.root.geometry("620x700")
+        self.root.resizable(False, False)
+        self.root.configure(bg="#f1f5f9")
+
+        # Cabeçalho
+        header_frame = tk.Frame(root, bg="#0f172a", height=80)
+        header_frame.pack(fill="x")
+
+        lbl_title = tk.Label(
+            header_frame,
+            text="🛡️ FortiClient VPN Manager",
+            font=("Helvetica", 17, "bold"),
+            fg="#f8fafc",
+            bg="#0f172a"
+        )
+        lbl_title.pack(pady=(14, 2))
+
+        lbl_sub = tk.Label(
+            header_frame,
+            text="Rede Privada Corporativa • DTIC / CBMPA / PRODEPA",
+            font=("Helvetica", 9),
+            fg="#94a3b8",
+            bg="#0f172a"
+        )
+        lbl_sub.pack(pady=(0, 12))
+
+        # Status Visual no topo
+        status_bar = tk.Frame(root, bg="#ffffff", bd=1, relief="solid")
+        status_bar.pack(fill="x", padx=20, pady=(15, 10))
+
+        self.lbl_status_icon = tk.Label(status_bar, text="●", font=("Helvetica", 22), fg="#ef4444", bg="#ffffff")
+        self.lbl_status_icon.pack(side="left", padx=(15, 5), pady=8)
+
+        self.lbl_status_text = tk.Label(status_bar, text="DESCONECTADO", font=("Helvetica", 13, "bold"), fg="#ef4444", bg="#ffffff")
+        self.lbl_status_text.pack(side="left", pady=8)
+
+        self.lbl_ip_info = tk.Label(status_bar, text="Origem: 203.0.113.7", font=("Helvetica", 9), fg="#64748b", bg="#ffffff")
+        self.lbl_ip_info.pack(side="right", padx=15, pady=8)
+
+        # Card de Configurações Editáveis
+        config_card = tk.LabelFrame(root, text=" Configurações de Conexão (IPs Privados) ", font=("Helvetica", 10, "bold"), bg="#ffffff", fg="#1e293b", padx=15, pady=12)
+        config_card.pack(fill="x", padx=20, pady=5)
+
+        # Grid de entradas
+        tk.Label(config_card, text="Gateway VPN (IP Privado):", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(row=0, column=0, sticky="w", pady=5)
+        self.entry_gateway = tk.Entry(config_card, font=("Monospace", 9), width=20)
+        self.entry_gateway.insert(0, "198.51.100.100")
+        self.entry_gateway.grid(row=0, column=1, sticky="w", padx=8, pady=5)
+
+        tk.Label(config_card, text="Meu IP Local:", font=("Helvetica", 9), bg="#ffffff", fg="#334155").grid(row=0, column=2, sticky="w", pady=5)
+        self.entry_local_ip = tk.Entry(config_card, font=("Monospace", 9), width=16)
+        self.entry_local_ip.insert(0, "203.0.113.7")
+        self.entry_local_ip.grid(row=0, column=3, sticky="w", padx=8, pady=5)
+
+        tk.Label(config_card, text="Usuário (EAP):", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(row=1, column=0, sticky="w", pady=5)
+        self.entry_user = tk.Entry(config_card, font=("Monospace", 9), width=20)
+        self.entry_user.insert(0, "miranda")
+        self.entry_user.grid(row=1, column=1, sticky="w", padx=8, pady=5)
+
+        tk.Label(config_card, text="Senha:", font=("Helvetica", 9), bg="#ffffff", fg="#334155").grid(row=1, column=2, sticky="w", pady=5)
+        self.entry_pass = tk.Entry(config_card, font=("Monospace", 9), show="•", width=16)
+        self.entry_pass.insert(0, "REDACTED-CREDENTIAL")
+        self.entry_pass.grid(row=1, column=3, sticky="w", padx=8, pady=5)
+
+        tk.Label(config_card, text="Chave PSK:", font=("Helvetica", 9), bg="#ffffff", fg="#334155").grid(row=2, column=0, sticky="w", pady=5)
+        self.entry_psk = tk.Entry(config_card, font=("Monospace", 9), width=20)
+        self.entry_psk.insert(0, "REDACTED-PSK")
+        self.entry_psk.grid(row=2, column=1, sticky="w", padx=8, pady=5)
+
+        tk.Label(config_card, text="IP Virtual:", font=("Helvetica", 9), bg="#ffffff", fg="#64748b").grid(row=2, column=2, sticky="w", pady=5)
+        lbl_vip_info = tk.Label(config_card, text="Dinâmico (DHCP FortiGate)", font=("Helvetica", 9, "italic"), bg="#ffffff", fg="#059669")
+        lbl_vip_info.grid(row=2, column=3, sticky="w", padx=8, pady=5)
+
+        # Botões Principais de Conectar / Desconectar
+        btn_frame = tk.Frame(root, bg="#f1f5f9")
+        btn_frame.pack(fill="x", padx=20, pady=10)
+
+        self.btn_connect = tk.Button(
+            btn_frame,
+            text="▶ CONECTAR VPN",
+            font=("Helvetica", 11, "bold"),
+            bg="#16a34a",
+            fg="#ffffff",
+            activebackground="#15803d",
+            activeforeground="#ffffff",
+            relief="flat",
+            height=2,
+            cursor="hand2",
+            command=self.on_connect
+        )
+        self.btn_connect.pack(side="left", padx=4, expand=True, fill="x")
+
+        self.btn_disconnect = tk.Button(
+            btn_frame,
+            text="⏹ DESCONECTAR",
+            font=("Helvetica", 11, "bold"),
+            bg="#dc2626",
+            fg="#ffffff",
+            activebackground="#b91c1c",
+            activeforeground="#ffffff",
+            relief="flat",
+            height=2,
+            cursor="hand2",
+            command=self.on_disconnect
+        )
+        self.btn_disconnect.pack(side="right", padx=4, expand=True, fill="x")
+
+        # Barra de Ações Rápidas (Acesso Web e Testes)
+        action_bar = tk.Frame(root, bg="#f1f5f9")
+        action_bar.pack(fill="x", padx=20, pady=4)
+
+        btn_open_web = tk.Button(
+            action_bar,
+            text="🌐 Abrir Painel Web (10.64.10.1:6464)",
+            font=("Helvetica", 9, "bold"),
+            bg="#0284c7",
+            fg="#ffffff",
+            activebackground="#0369a1",
+            activeforeground="#ffffff",
+            relief="flat",
+            pady=6,
+            cursor="hand2",
+            command=self.open_web_panel
+        )
+        btn_open_web.pack(side="left", padx=4, expand=True, fill="x")
+
+        btn_test_web = tk.Button(
+            action_bar,
+            text="🔍 Validar Conexão Web (HTTP)",
+            font=("Helvetica", 9),
+            bg="#e2e8f0",
+            relief="flat",
+            pady=6,
+            cursor="hand2",
+            command=self.on_test_web
+        )
+        btn_test_web.pack(side="right", padx=4, expand=True, fill="x")
+
+        # Caixa de Log
+        log_frame = tk.Frame(root, bg="#f1f5f9")
+        log_frame.pack(fill="both", padx=20, pady=(10, 15), expand=True)
+
+        log_header = tk.Frame(log_frame, bg="#f1f5f9")
+        log_header.pack(fill="x", pady=(0, 4))
+        tk.Label(log_header, text="📋 Log de Atividades e Diagnóstico:", font=("Helvetica", 9, "bold"), bg="#f1f5f9", fg="#334155").pack(side="left")
+
+        btn_clear = tk.Button(log_header, text="Limpar", font=("Helvetica", 8), bg="#e2e8f0", relief="flat", command=self.clear_log)
+        btn_clear.pack(side="right")
+
+        self.log_text = tk.Text(log_frame, height=10, font=("Monospace", 8), bg="#0f172a", fg="#e2e8f0", bd=0, padx=8, pady=8)
+        self.log_text.pack(fill="both", expand=True)
+
+        self.log("Aplicativo iniciado.")
+        self.log(f"Gateway configurado: {self.entry_gateway.get()} (IP Privado)")
+        self.update_status()
+        self.start_auto_refresh()
+
+    def log(self, message):
+        self.log_text.insert(tk.END, f"[{time.strftime('%H:%M:%S')}] {message}\n")
+        self.log_text.see(tk.END)
+
+    def clear_log(self):
+        self.log_text.delete("1.0", tk.END)
+
+    def open_web_panel(self):
+        self.log(f"Abrindo navegador em: {WEB_URL}")
+        webbrowser.open(WEB_URL)
+
+    def get_vpn_info(self):
+        try:
+            out = subprocess.check_output(["sudo", "swanctl", "--list-sas"], stderr=subprocess.STDOUT, text=True)
+            if "ESTABLISHED" in out and CHILD_NAME in out:
+                # Extrair IP virtual atribuído
+                vip_match = re.search(r"local.*?\[([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\]", out)
+                if not vip_match:
+                    vip_match = re.search(r"local\s+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/32", out)
+                vip = vip_match.group(1) if vip_match else "Ativo"
+                return True, vip
+            return False, None
+        except Exception:
+            return False, None
+
+    def update_status(self):
+        connected, vip = self.get_vpn_info()
+        if connected:
+            self.lbl_status_icon.config(fg="#16a34a")
+            self.lbl_status_text.config(text=f"CONECTADO (IP: {vip})", fg="#16a34a")
+            self.lbl_ip_info.config(text=f"VIP Atribuído: {vip}")
+            self.btn_connect.config(state="disabled", bg="#94a3b8")
+            self.btn_disconnect.config(state="normal", bg="#dc2626")
+        else:
+            self.lbl_status_icon.config(fg="#ef4444")
+            self.lbl_status_text.config(text="DESCONECTADO", fg="#ef4444")
+            self.lbl_ip_info.config(text=f"Origem: {self.entry_local_ip.get()}")
+            self.btn_connect.config(state="normal", bg="#16a34a")
+            self.btn_disconnect.config(state="disabled", bg="#94a3b8")
+
+    def start_auto_refresh(self):
+        def loop():
+            while True:
+                time.sleep(5)
+                try:
+                    self.root.after(0, self.update_status)
+                except Exception:
+                    break
+        t = threading.Thread(target=loop, daemon=True)
+        t.start()
+
+    def save_conf(self):
+        gw = self.entry_gateway.get().strip()
+        local_ip = self.entry_local_ip.get().strip()
+        user = self.entry_user.get().strip()
+        pwd = self.entry_pass.get().strip()
+        psk = self.entry_psk.get().strip()
+
+        conf_content = f"""connections {{
+    forticlient {{
+        version  = 2
+        remote_addrs = {gw}
+        local_addrs  = {local_ip}
+        proposals    = aes256-sha256-modp8192, aes256-sha256-modp4096, aes128-sha256-modp4096, aes256-sha256-modp2048, aes256-sha1-modp2048, aes128-sha256-modp2048
+        encap        = yes
+        mobike       = no
+        dpd_delay    = 5s
+        keyingtries  = 0
+        rekey_time   = 86400s
+
+        vips = 0.0.0.0
+
+        local {{
+            auth     = eap-mschapv2
+            id       = {user}
+            eap_id   = {user}
+        }}
+
+        remote {{
+            auth = psk
+            id   = %any
+        }}
+
+        children {{
+            forticlient {{
+                remote_ts     = 0.0.0.0/0
+                local_ts      = dynamic
+                esp_proposals = aes256-sha256-modp8192, aes256-sha1-modp8192, aes128-sha256-modp8192, aes256-sha256, aes128-sha256
+                dpd_action    = restart
+                mode          = tunnel
+                rekey_time    = 43200s
+            }}
+        }}
+    }}
+}}
+
+secrets {{
+    ike-forticlient {{
+        secret = "{psk}"
+    }}
+    ike-forticlient-alt {{
+        secret = "REDACTED-PSK"
+    }}
+    eap-forticlient {{
+        id     = {user}
+        secret = "{pwd}"
+    }}
+    eap-forticlient-alt {{
+        id     = {user}
+        secret = "REDACTED-CREDENTIAL"
+    }}
+}}
+"""
+        subprocess.run(["sudo", "tee", CONF_FILE], input=conf_content, text=True, capture_output=True)
+        subprocess.run(["sudo", "chmod", "600", CONF_FILE])
+        subprocess.run(["sudo", "swanctl", "--load-all"], capture_output=True)
+
+    def on_connect(self):
+        gw = self.entry_gateway.get().strip()
+        self.log(f"Iniciando conexão para Gateway {gw} (IP Privado)...")
+        self.btn_connect.config(state="disabled")
+
+        def run():
+            self.save_conf()
+            proc = subprocess.run(["sudo", "swanctl", "--initiate", "--child", CHILD_NAME], capture_output=True, text=True)
+            output = proc.stdout + proc.stderr
+            lines = [l for l in output.splitlines() if "agent plugin" not in l and "plugin 'agent'" not in l]
+            clean_output = "\n".join(lines)
+
+            connected, vip = self.get_vpn_info()
+            if proc.returncode == 0 and connected:
+                self.root.after(0, lambda: self.log(f"✓ SUCESSO: VPN CONECTADA! IP Virtual atribuído: {vip}"))
+            else:
+                if "retransmit" in clean_output.lower():
+                    self.root.after(0, lambda: self.log(f"✗ Timeout: Sem resposta do Gateway {gw} na porta 500."))
+                elif "NO_PROPOSAL_CHOSEN" in clean_output:
+                    self.root.after(0, lambda: self.log("✗ FortiGate respondeu NO_PROPOSAL_CHOSEN."))
+                else:
+                    self.root.after(0, lambda: self.log(f"✗ Retorno: {clean_output.strip()[:120]}"))
+
+            self.root.after(0, self.update_status)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def on_disconnect(self):
+        self.log("Desconectando da VPN...")
+        self.btn_disconnect.config(state="disabled")
+
+        def run():
+            subprocess.run(["sudo", "swanctl", "--terminate", "--ike", CHILD_NAME], capture_output=True)
+            self.root.after(0, lambda: self.log("✓ VPN Desconectada."))
+            self.root.after(0, self.update_status)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def on_test_web(self):
+        self.log("Testando acesso ao Painel Web FortiOS (https://10.64.10.1:6464)...")
+        def run():
+            try:
+                cmd = ["curl", "-k", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--connect-timeout", "5", WEB_URL]
+                proc = subprocess.run(cmd, capture_output=True, text=True)
+                code = proc.stdout.strip()
+                if code == "200":
+                    self.root.after(0, lambda: self.log(f"✓ ACESSO CONFIRMADO! Código HTTP {code} OK (Painel FortiOS online)"))
+                elif code:
+                    self.root.after(0, lambda: self.log(f"✓ Conexão respondeu com código HTTP {code}"))
+                else:
+                    self.root.after(0, lambda: self.log("✗ Não foi possível carregar a página (verifique se a VPN está conectada)."))
+            except Exception as e:
+                self.root.after(0, lambda: self.log(f"✗ Erro no teste: {e}"))
+
+        threading.Thread(target=run, daemon=True).start()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = VpnApp(root)
+    root.mainloop()

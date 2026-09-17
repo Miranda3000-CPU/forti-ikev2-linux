@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=FortiClient VPN
+Comment=Gerenciador FortiClient VPN IKEv2 (DTIC / PRODEPA)
+Exec=/usr/local/bin/vpn-gui
+Icon=network-vpn
+Terminal=false
+Categories=Network;Security;
+Keywords=vpn;fortinet;forticlient;ikev2;ipsec;

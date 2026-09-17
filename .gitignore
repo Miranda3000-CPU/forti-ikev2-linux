@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Ambientes virtuais
+env/
+venv/
+.venv/
+
+# Configurações com credenciais locais
+*.conf
+*.key
+*.pem
+*.secret
+!config/*.example
+
+# Logs do sistema e temporários
+*.log
+.DS_Store
+.vscode/
+.idea/

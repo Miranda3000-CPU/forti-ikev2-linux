@@ -1,0 +1,56 @@
+# /etc/swanctl/conf.d/forti.conf
+# Modelo de configuração FortiGate IKEv2 / strongSwan (swanctl)
+
+connections {
+    forticlient {
+        version  = 2
+        # IP Privado ou FQDN do Gateway FortiGate (ex: 198.51.100.100)
+        remote_addrs = 198.51.100.100
+        # IP local da sua interface de rede permitida no firewall (ex: 203.0.113.7)
+        local_addrs  = 203.0.113.7
+
+        # Algoritmos da Fase 1 (IKE SA) - MODP_8192 (DH Group 18) requerido por padrão
+        proposals    = aes256-sha256-modp8192, aes256-sha256-modp4096, aes128-sha256-modp4096, aes256-sha256-modp2048, aes256-sha1-modp2048, aes128-sha256-modp2048
+        encap        = yes
+        mobike       = no
+        dpd_delay    = 5s
+        keyingtries  = 0
+        rekey_time   = 86400s
+
+        # Solicita IP Virtual dinâmico via DHCP do FortiGate (CPRP)
+        vips = 0.0.0.0
+
+        local {
+            auth     = eap-mschapv2
+            id       = seu_usuario
+            eap_id   = seu_usuario
+        }
+
+        remote {
+            auth = psk
+            id   = %any
+        }
+
+        children {
+            forticlient {
+                remote_ts     = 0.0.0.0/0
+                local_ts      = dynamic
+                # Algoritmos da Fase 2 (ESP SA / Quick Mode)
+                esp_proposals = aes256-sha256-modp8192, aes256-sha1-modp8192, aes128-sha256-modp8192, aes256-sha256, aes128-sha256
+                dpd_action    = restart
+                mode          = tunnel
+                rekey_time    = 43200s
+            }
+        }
+    }
+}
+
+secrets {
+    ike-forticlient {
+        secret = "sua_chave_psk"
+    }
+    eap-forticlient {
+        id     = seu_usuario
+        secret = "sua_senha_eap"
+    }
+}
