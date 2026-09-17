@@ -15,7 +15,12 @@ venv/
 *.key
 *.pem
 *.secret
+config.json
 !config/*.example
+
+# Compilação e empacotamento
+build/
+*.spec.bak
 
 # Logs do sistema e temporários
 *.log

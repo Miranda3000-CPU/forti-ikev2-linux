@@ -1,19 +1,18 @@
-# 🛡️ FortiClient VPN Manager (Container Edition)
+# 🛡️ FortiClient VPN Manager - Multiplataforma (Linux & Windows)
 
-Uma solução completa, independente e conteinerizada (Docker) para conexão a VPNs corporativas **FortiGate (Fortinet)** via protocolo **IKEv2 / IPsec**, utilizando autenticação dupla (**Pre-Shared Key + EAP-MSCHAPv2**) e IP Virtual dinâmico (CPRP).
-
-Projetada para funcionar em **qualquer máquina Linux com Docker instalado**, sem a necessidade de instalar manualmente dependências, bibliotecas ou serviços no sistema operacional host.
+Aplicativo com **Interface Gráfica Nativa** e identidade visual institucional (DTIC), desenvolvido para conexão a VPNs corporativas **FortiGate (Fortinet)** utilizando o protocolo **IKEv2 / IPsec**, autenticação dupla (**Pre-Shared Key + EAP-MSCHAPv2**) e IP Virtual dinâmico (CPRP).
 
 ---
 
-## 🌟 Principais Vantagens do Container
+## 💻 Recursos da Aplicação Gráfica
 
-- **Portabilidade Total:** Funciona de forma idêntica em qualquer distribuição Linux (Ubuntu, Debian, Fedora, Arch, AlmaLinux, openSUSE, etc.) com Docker.
-- **Isolamento de Dependências:** O daemon do strongSwan, swanctl, bibliotecas de cifras avançadas e Python/Tkinter rodam 100% isolados dentro do container.
-- **Modo de Rede Host (`network_mode: host`):** O túnel IPsec criado no container é compartilhado com a máquina host, permitindo que navegadores e ferramentas do seu sistema acessem serviços internos (ex: `https://10.64.10.1:6464`) de forma transparente.
-- **Interface Gráfica Dupla:**
-  1. **Desktop GUI (Tkinter):** Abre diretamente como uma janela nativa no seu desktop (via X11).
-  2. **Web GUI (Navegador):** Painel web responsivo disponível em **`http://localhost:8080`**, acessível de qualquer navegador.
+- **Ícone Institucional Personalizado:** O logotipo DTIC (`assets/dtic-logo-whasapp.jpeg`) é recortado dinamicamente em formato **redondo**, utilizado tanto no cabeçalho da janela, barra de tarefas, atalhos do sistema e executável.
+- **Segurança de Credenciais:** As credenciais (Usuário, Senha e PSK) **NÃO** ficam gravadas no código-fonte nem no Git. Elas são salvas localmente no computador do usuário (`~/.config/forticlient-vpn/config.json` no Linux com permissão `0600`, ou `%APPDATA%\FortiClientVPN\config.json` no Windows) apenas após o cadastro na interface.
+- **Multiplataforma Nativa:**
+  - **Windows:** Executável portátil (`.exe`) e integração com `rasdial` / PowerShell VPN API.
+  - **Linux:** Pacote `.deb` nativo para Debian/Ubuntu e script instalador para Fedora/Arch (via `strongSwan / swanctl`).
+- **Conexão e Desconexão com 1 Clique:** Detecção em tempo real de status e captura automática do IP Virtual (VIP) atribuído.
+- **Acesso Direto ao Painel Web:** Botão rápido para abrir `https://10.64.10.1:6464` no navegador padrão e teste integrado de conectividade HTTP.
 
 ---
 
@@ -21,145 +20,101 @@ Projetada para funcionar em **qualquer máquina Linux com Docker instalado**, se
 
 ```text
 forticlient-vpn-linux/
-├── .git/                           # Repositório Git (branch 'main')
-├── .gitignore                      # Protege arquivos com senhas locais (*.conf)
-├── Dockerfile                      # Definição da imagem com Debian, strongSwan e GUI
-├── docker-compose.yml              # Orquestração do container com privilégios de rede
-├── entrypoint.sh                   # Inicialização do daemon charon e da aplicação
-├── run.sh                          # Script prático de 1 comando para subir a aplicação
-├── install.sh                      # Instalador de atalhos no Desktop e comando global
-├── uninstall.sh                    # Desinstalador
-├── README.md                       # Documentação completa
-├── app/
-│   └── vpn-gui.py                  # Aplicação gráfica (Tkinter + Web Server HTTP 8080)
+├── assets/
+│   ├── dtic-logo-whasapp.jpeg      # Logotipo oficial DTIC
+│   ├── icon.png                    # Ícone recortado redondo (PNG)
+│   ├── icon.ico                    # Ícone multi-resolução para Windows (.exe)
+│   └── forticlient-vpn.desktop     # Lançador para o menu de aplicativos Linux
 ├── config/
-│   ├── forti.conf.example          # Modelo de configuração para o swanctl
-│   └── forti.conf                  # Arquivo montado e persistido no container
-└── assets/
-    └── forticlient-vpn.desktop     # Atalho para Área de Trabalho e Menu GNOME
+│   └── forti.conf.example          # Modelo swanctl com placeholders
+├── dist/                           # Executáveis gerados (.deb e .exe)
+├── vpn-gui.py                      # Aplicação gráfica Python (Tkinter + PIL)
+├── FortiClient-VPN.spec            # Especificação PyInstaller para gerar executável Windows
+├── build_windows.bat               # Script para compilar o .exe no Windows
+├── build_deb.sh                    # Script para gerar o pacote .deb no Linux
+├── install.sh                      # Instalador de script para Linux
+├── install.ps1                     # Instalador/configurador para Windows PowerShell
+├── uninstall.sh                    # Desinstalador Linux
+├── requirements.txt                # Dependências Python (Pillow)
+└── README.md                       # Documentação
 ```
 
 ---
 
-## 📋 Pré-requisitos
+# 🐧 Instalação no LINUX
 
-- **Docker** e **Docker Compose** instalados na máquina:
-  ```bash
-  docker --version
-  docker compose version
-  ```
-- O seu IP local na rede interna (ex: `203.0.113.7`) deve estar liberado nas regras do firewall do FortiGate.
+Compatível com **Ubuntu (20.04+)**, **Debian (11+)**, **Linux Mint**, **Pop!_OS**, **Fedora** e **Arch**.
 
----
+### Opção 1: Instalação via Pacote `.deb` (Recomendada para Debian / Ubuntu)
 
-## ⚡ Como Rodar (Início Rápido)
+Você pode instalar o pacote diretamente gerado na pasta `dist/`:
 
-### 1. Clonar o Repositório
 ```bash
-git clone <URL_DO_REPOSITORIO> forticlient-vpn-linux
-cd forticlient-vpn-linux
+# 1. Gerar o pacote .deb (se ainda não gerado)
+./build_deb.sh
+
+# 2. Instalar o pacote
+sudo apt install ./dist/forticlient-vpn_1.0.0_all.deb
 ```
 
-### 2. Iniciar a Aplicação
-Basta executar o script de inicialização:
-```bash
-chmod +x run.sh
-./run.sh
-```
-ou diretamente via Docker Compose:
-```bash
-docker compose up --build
-```
-
-O container irá:
-1. Conceder permissão local para exibição gráfica no X11.
-2. Iniciar o daemon de IPsec (`charon`) isoladamente.
-3. Abrir a janela gráfica **FortiClient VPN** na sua tela.
-4. Disponibilizar a interface web em **`http://localhost:8080`**.
+Ao instalar o `.deb`:
+- O comando `forticlient-vpn` fica disponível globalmente no sistema.
+- O atalho com o **ícone redondo oficial DTIC** é adicionado ao menu de aplicativos e pode ser fixado na barra de tarefas.
+- As dependências de rede (`strongswan`, `strongswan-swanctl`) e Python são configuradas automaticamente.
 
 ---
 
-## 🖥️ Utilização
+### Opção 2: Instalação via Script (`install.sh`)
 
-### Pela Janela Desktop (Tkinter)
-- Clique em **▶ CONECTAR VPN**.
-- Quando o indicador ficar verde, o IP virtual dinâmico (ex: `10.64.4.13`) estará ativo.
-- Clique em **🌐 Abrir Painel Web (10.64.10.1:6464)** para copiar a URL e abrir o navegador.
-- Clique em **🔍 Validar Conexão Web** para verificar se o serviço interno respondeu com `HTTP 200 OK`.
+Caso prefira instalar via script em qualquer distribuição:
 
-### Pelo Navegador (Web UI)
-- Abra no seu navegador: **`http://localhost:8080`**
-- Tenha os mesmos controles de conexão, status, edição de credenciais, logs e link direto para o painel corporativo.
-
----
-
-## ⚙️ Configurações e Persistência
-
-As configurações são salvas em `config/forti.conf` e persistidas fora do container.
-
-### Exemplo de Configuração (`config/forti.conf`):
-
-```ini
-connections {
-    forticlient {
-        version  = 2
-        remote_addrs = 198.51.100.100       # Gateway Privado
-        local_addrs  = 203.0.113.7         # IP Local autorizado
-        proposals    = aes256-sha256-modp8192, aes256-sha256-modp4096, aes128-sha256-modp4096, aes256-sha256-modp2048, aes256-sha1-modp2048, aes128-sha256-modp2048
-        encap        = yes
-        mobike       = no
-        dpd_delay    = 5s
-        vips         = 0.0.0.0            # Dynamic VIP
-
-        local {
-            auth     = eap-mschapv2
-            id       = seu_usuario
-            eap_id   = seu_usuario
-        }
-
-        remote {
-            auth = psk
-            id   = %any
-        }
-
-        children {
-            forticlient {
-                remote_ts     = 0.0.0.0/0
-                local_ts      = dynamic
-                esp_proposals = aes256-sha256-modp8192, aes256-sha1-modp8192, aes128-sha256-modp8192, aes256-sha256, aes128-sha256
-                dpd_action    = restart
-                mode          = tunnel
-            }
-        }
-    }
-}
-
-secrets {
-    ike-forticlient { secret = "sua_chave_psk" }
-    eap-forticlient { id = seu_usuario secret = "sua_senha" }
-}
-```
-
----
-
-## 📌 Instalação do Atalho na Área de Trabalho (Opcional)
-
-Para criar um atalho na Área de Trabalho e poder executar com dois cliques:
 ```bash
+chmod +x install.sh uninstall.sh vpn-gui.py build_deb.sh
 ./install.sh
 ```
 
 ---
 
-## 🗑️ Desinstalação
+# 🪟 Instalação e Executável no WINDOWS
 
-Para parar o container e remover os atalhos criados:
-```bash
-./uninstall.sh
-```
+Compatível com **Windows 10** e **Windows 11**.
+
+### Opção 1: Gerar e Rodar como Programa Executável (`.exe`)
+
+1. No Windows, clone o repositório ou baixe os arquivos.
+2. Dê um duplo-clique no arquivo **`build_windows.bat`** (ou execute via Prompt de Comando):
+   ```cmd
+   build_windows.bat
+   ```
+3. O script irá instalar o `Pillow` e `PyInstaller` e compilar o executável com o **ícone oficial redondo DTIC** em:
+   ```text
+   dist\FortiClient-VPN.exe
+   ```
+4. Basta mover o **`FortiClient-VPN.exe`** para onde desejar (Área de Trabalho, Arquivos de Programas, etc.) e executá-lo diretamente com 2 cliques, **sem precisar abrir terminal nem instalar Python em outros computadores**.
 
 ---
 
-## 📄 Licença
+### Opção 2: Configuração Rápida do Perfil de Rede (PowerShell)
 
-Uso institucional interno (DTIC / CBMPA / PRODEPA).
+Execute no PowerShell como Administrador para registrar a conexão IKEv2 com as cifras seguras (Diffie-Hellman Group 18 / MODP_8192):
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\install.ps1
+```
+
+O `install.ps1` detecta automaticamente se o `FortiClient-VPN.exe` existe e cria o atalho oficial na Área de Trabalho.
+
+---
+
+## 🔐 Configuração das Credenciais na Interface
+
+Ao abrir o programa pela primeira vez:
+1. **Gateway VPN:** `198.51.100.100` (ou IP corporativo fornecido)
+2. **Meu IP Local:** Detectado automaticamente pela interface de rede
+3. **Usuário (EAP):** Seu usuário institucional
+4. **Senha:** Sua senha de rede
+5. **Chave PSK:** Chave pré-compartilhada fornecida pela DTIC
+6. Clique em **💾 Salvar Configurações** (ou clique diretamente em **▶ CONECTAR VPN** com a caixa "Salvar dados neste computador" marcada).
+
+Suas credenciais serão salvas de forma segura no seu próprio diretório de usuário e **nunca** serão enviadas a repositórios.
