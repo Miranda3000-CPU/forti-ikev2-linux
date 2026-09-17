@@ -1,41 +1,40 @@
-# 🛡️ FortiClient VPN GUI para Linux (Ubuntu / Debian)
+# 🛡️ FortiClient VPN Manager (Container Edition)
 
-Um aplicativo nativo com **Interface Gráfica (GUI em Tkinter)** para conexão a VPNs corporativas **FortiGate (Fortinet)** utilizando o protocolo **IKEv2 / IPsec**, autenticação dupla (**Pre-Shared Key + EAP-MSCHAPv2**) e alocação dinâmica de IP Virtual (DHCP / CPRP).
+Uma solução completa, independente e conteinerizada (Docker) para conexão a VPNs corporativas **FortiGate (Fortinet)** via protocolo **IKEv2 / IPsec**, utilizando autenticação dupla (**Pre-Shared Key + EAP-MSCHAPv2**) e IP Virtual dinâmico (CPRP).
 
-O programa foi desenvolvido sob medida para o Linux (Ubuntu/Debian) como alternativa leve, estável e intuitiva ao FortiClient oficial, trazendo compatibilidade total com o grupo Diffie-Hellman **MODP_8192 (DH Group 18)**.
-
----
-
-## 🚀 Funcionalidades da Interface Gráfica
-
-- **Conexão e Desconexão com 1 Clique:** Botões intuitivos e de alta resposta.
-- **Indicador de Status em Tempo Real:** Mostra visualmente se a VPN está conectada e exibe o IP Virtual dinâmico atribuído pelo FortiGate (ex: `10.64.4.13`).
-- **Campos Editáveis:** Permite configurar diretamente na tela:
-  - Gateway VPN (IP Privado)
-  - IP Local de Origem
-  - Usuário (EAP-MSCHAPv2)
-  - Senha
-  - Chave Pré-compartilhada (PSK)
-- **Acesso Direto ao Painel Web:** Botão **"🌐 Abrir Painel Web"** que abre automaticamente o endereço corporativo interno (`https://10.64.10.1:6464/login?redir=%2F`) no navegador padrão.
-- **Validação de Conectividade:** Botão **"🔍 Validar Conexão Web"** que testa a resposta HTTP do painel interno via túnel em tempo real.
-- **Console de Diagnóstico Integrado:** Caixa de logs na parte inferior para acompanhar a negociação IKEv2/ESP e eventuais mensagens do firewall.
+Projetada para funcionar em **qualquer máquina Linux com Docker instalado**, sem a necessidade de instalar manualmente dependências, bibliotecas ou serviços no sistema operacional host.
 
 ---
 
-## 📂 Estrutura do Projeto
+## 🌟 Principais Vantagens do Container
+
+- **Portabilidade Total:** Funciona de forma idêntica em qualquer distribuição Linux (Ubuntu, Debian, Fedora, Arch, AlmaLinux, openSUSE, etc.) com Docker.
+- **Isolamento de Dependências:** O daemon do strongSwan, swanctl, bibliotecas de cifras avançadas e Python/Tkinter rodam 100% isolados dentro do container.
+- **Modo de Rede Host (`network_mode: host`):** O túnel IPsec criado no container é compartilhado com a máquina host, permitindo que navegadores e ferramentas do seu sistema acessem serviços internos (ex: `https://10.64.10.1:6464`) de forma transparente.
+- **Interface Gráfica Dupla:**
+  1. **Desktop GUI (Tkinter):** Abre diretamente como uma janela nativa no seu desktop (via X11).
+  2. **Web GUI (Navegador):** Painel web responsivo disponível em **`http://localhost:8080`**, acessível de qualquer navegador.
+
+---
+
+## 📂 Estrutura do Repositório
 
 ```text
 forticlient-vpn-linux/
 ├── .git/                           # Repositório Git (branch 'main')
-├── .gitignore                      # Protege arquivos locais de credenciais (*.conf)
-├── README.md                       # Documentação completa
-├── install.sh                      # Instalador automatizado
+├── .gitignore                      # Protege arquivos com senhas locais (*.conf)
+├── Dockerfile                      # Definição da imagem com Debian, strongSwan e GUI
+├── docker-compose.yml              # Orquestração do container com privilégios de rede
+├── entrypoint.sh                   # Inicialização do daemon charon e da aplicação
+├── run.sh                          # Script prático de 1 comando para subir a aplicação
+├── install.sh                      # Instalador de atalhos no Desktop e comando global
 ├── uninstall.sh                    # Desinstalador
-├── bin/
-│   └── vpn-gui                     # Programa com Interface Gráfica (Python 3 / Tkinter)
+├── README.md                       # Documentação completa
+├── app/
+│   └── vpn-gui.py                  # Aplicação gráfica (Tkinter + Web Server HTTP 8080)
 ├── config/
-│   ├── forti.conf.example          # Modelo de configuração base para o swanctl
-│   └── sudoers-vpn.example         # Exemplo de permissão sudo sem senha
+│   ├── forti.conf.example          # Modelo de configuração para o swanctl
+│   └── forti.conf                  # Arquivo montado e persistido no container
 └── assets/
     └── forticlient-vpn.desktop     # Atalho para Área de Trabalho e Menu GNOME
 ```
@@ -44,58 +43,61 @@ forticlient-vpn-linux/
 
 ## 📋 Pré-requisitos
 
-- **Sistema Operacional:** Ubuntu 20.04+, 22.04+, 24.04+ ou Debian 11/12.
-- **Permissão de Administrador (`sudo`):** Necessária para o strongSwan criar os túneis IPsec no kernel.
-- **Liberação de Rede:** O seu IP local (ex: `203.0.113.7`) deve estar autorizado no firewall corporativo.
+- **Docker** e **Docker Compose** instalados na máquina:
+  ```bash
+  docker --version
+  docker compose version
+  ```
+- O seu IP local na rede interna (ex: `203.0.113.7`) deve estar liberado nas regras do firewall do FortiGate.
 
 ---
 
-## ⚡ Instalação Rápida
+## ⚡ Como Rodar (Início Rápido)
 
-1. Clone ou copie este repositório para o seu computador:
-   ```bash
-   git clone <URL_DO_REPOSITORIO> forticlient-vpn-linux
-   cd forticlient-vpn-linux
-   ```
+### 1. Clonar o Repositório
+```bash
+git clone <URL_DO_REPOSITORIO> forticlient-vpn-linux
+cd forticlient-vpn-linux
+```
 
-2. Execute o instalador:
-   ```bash
-   chmod +x install.sh uninstall.sh bin/vpn-gui
-   ./install.sh
-   ```
+### 2. Iniciar a Aplicação
+Basta executar o script de inicialização:
+```bash
+chmod +x run.sh
+./run.sh
+```
+ou diretamente via Docker Compose:
+```bash
+docker compose up --build
+```
 
-O instalador irá:
-1. Instalar as dependências do sistema (`strongswan`, `strongswan-swanctl`, `python3-tk`, `curl`).
-2. Copiar o aplicativo `vpn-gui` para `/usr/local/bin/`.
-3. Criar os atalhos gráficos na **Área de Trabalho** e no **Menu de Aplicativos**.
-4. Habilitar os serviços de rede do strongSwan.
-
----
-
-## 🖥️ Como Usar
-
-1. **Abrir o Programa:**
-   - Dê um duplo-clique no ícone **FortiClient VPN** na sua Área de Trabalho; ou
-   - Abra o terminal e digite:
-     ```bash
-     vpn-gui
-     ```
-2. **Conectar:**
-   - Preencha ou confirme suas credenciais e o IP do Gateway.
-   - Clique em **▶ CONECTAR VPN**.
-   - Em poucos segundos, o indicador ficará verde indicando **CONECTADO** com o IP Virtual recebido.
-3. **Acessar o Painel Web:**
-   - Clique em **🌐 Abrir Painel Web (10.64.10.1:6464)** para abrir o navegador no sistema corporativo.
-   - Ou clique em **🔍 Validar Conexão Web** para verificar se o serviço está respondendo com HTTP 200.
-4. **Desconectar:**
-   - Clique em **⏹ DESCONECTAR**.
+O container irá:
+1. Conceder permissão local para exibição gráfica no X11.
+2. Iniciar o daemon de IPsec (`charon`) isoladamente.
+3. Abrir a janela gráfica **FortiClient VPN** na sua tela.
+4. Disponibilizar a interface web em **`http://localhost:8080`**.
 
 ---
 
-## ⚙️ Configuração Manual (Opcional)
+## 🖥️ Utilização
 
-O aplicativo armazena as configurações no arquivo padrão do strongSwan:
-`/etc/swanctl/conf.d/forti.conf`
+### Pela Janela Desktop (Tkinter)
+- Clique em **▶ CONECTAR VPN**.
+- Quando o indicador ficar verde, o IP virtual dinâmico (ex: `10.64.4.13`) estará ativo.
+- Clique em **🌐 Abrir Painel Web (10.64.10.1:6464)** para copiar a URL e abrir o navegador.
+- Clique em **🔍 Validar Conexão Web** para verificar se o serviço interno respondeu com `HTTP 200 OK`.
+
+### Pelo Navegador (Web UI)
+- Abra no seu navegador: **`http://localhost:8080`**
+- Tenha os mesmos controles de conexão, status, edição de credenciais, logs e link direto para o painel corporativo.
+
+---
+
+## ⚙️ Configurações e Persistência
+
+As configurações são salvas em `config/forti.conf` e persistidas fora do container.
+
+### Exemplo de Configuração (`config/forti.conf`):
 
 ```ini
 connections {
@@ -140,9 +142,18 @@ secrets {
 
 ---
 
+## 📌 Instalação do Atalho na Área de Trabalho (Opcional)
+
+Para criar um atalho na Área de Trabalho e poder executar com dois cliques:
+```bash
+./install.sh
+```
+
+---
+
 ## 🗑️ Desinstalação
 
-Caso precise desinstalar o aplicativo do sistema:
+Para parar o container e remover os atalhos criados:
 ```bash
 ./uninstall.sh
 ```

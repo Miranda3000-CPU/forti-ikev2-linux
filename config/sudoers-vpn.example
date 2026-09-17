@@ -1,5 +1,0 @@
-# /etc/sudoers.d/forticlient-vpn
-# Permite que o usuário execute swanctl e gerencie a VPN sem senha
-
-# Substitua 'seu_usuario' pelo seu nome de usuário no Linux:
-# seu_usuario ALL=(ALL) NOPASSWD: /usr/sbin/swanctl, /usr/bin/tee /etc/swanctl/conf.d/*, /usr/bin/chmod 600 /etc/swanctl/conf.d/*, /usr/bin/journalctl -u strongswan*
