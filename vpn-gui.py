@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 FortiClient VPN Manager - Interface Gráfica Multiplataforma (Linux & Windows)
-Conecta a VPNs corporativas FortiGate IKEv2 (EAP-MSCHAPv2 + PSK).
+Compatível com VPNs FortiGate IKEv2 (EAP-MSCHAPv2 + PSK).
 """
 
 import sys
@@ -19,34 +19,11 @@ import urllib.request
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-# Tratamento de caminhos para executáveis empacotados (PyInstaller / CX_Freeze)
-def get_resource_path(relative_path):
-    """Obtém o caminho absoluto para recursos, funcionando em dev e PyInstaller."""
-    if hasattr(sys, "_MEIPASS"):
-        base_path = sys._MEIPASS
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    
-    full_path = os.path.join(base_path, relative_path)
-    if os.path.exists(full_path):
-        return full_path
-    
-    # Fallback para instalação padrão Linux (/usr/share/forticlient-vpn/assets)
-    system_path = os.path.join("/usr/share/forticlient-vpn", relative_path)
-    if os.path.exists(system_path):
-        return system_path
-
-    return full_path
-
-# Suporte ao Pillow para manipulação do ícone circular
-try:
-    from PIL import Image, ImageTk, ImageDraw
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
-
 IS_WINDOWS = sys.platform == "win32"
 IS_LINUX = sys.platform.startswith("linux")
+
+# Flags de processo para Windows (execução silenciosa sem janela preta de cmd)
+WIN_CREATE_NO_WINDOW = 0x08000000 if IS_WINDOWS else 0
 
 CONF_FILE_LINUX = "/etc/swanctl/conf.d/forti.conf"
 CHILD_NAME = "forticlient"
@@ -54,26 +31,86 @@ VPN_NAME_WIN = "FortiClient-VPN"
 WEB_URL = "https://10.64.10.1:6464/login?redir=%2F"
 
 
-def get_default_local_ip(target_gw="198.51.100.100"):
-    """Detecta automaticamente o IP local roteado para o Gateway."""
+def get_resource_path(relative_path):
+    """Obtém caminho absoluto para recursos, funcionando em ambiente de dev e executável PyInstaller."""
+    if hasattr(sys, "_MEIPASS"):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+
+    full_path = os.path.join(base_path, relative_path)
+    if os.path.exists(full_path):
+        return full_path
+
+    if IS_LINUX:
+        system_path = os.path.join("/usr/share/forticlient-vpn", relative_path)
+        if os.path.exists(system_path):
+            return system_path
+
+    return full_path
+
+
+try:
+    from PIL import Image, ImageDraw
+    HAS_PIL = True
+except ImportError:
+    Image = None
+    ImageDraw = None
+    HAS_PIL = False
+
+try:
+    from PIL import ImageTk
+    HAS_IMAGETK = True
+except ImportError:
+    ImageTk = None
+    HAS_IMAGETK = False
+
+
+def detect_local_ip(target_gw="198.51.100.100"):
+    """
+    Detecta automaticamente o IP local roteado para o Gateway VPN.
+    Funciona de forma 100% nativa em Python tanto no Windows quanto no Linux,
+    sem recorrer a comandos de shell como ip, ifconfig ou cat.
+    """
+    # Método 1: Socket UDP voltado para o Gateway (não envia pacotes)
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0.5)
         s.connect((target_gw, 500))
         ip = s.getsockname()[0]
         s.close()
-        return ip
+        if ip and not ip.startswith("127."):
+            return ip
     except Exception:
-        try:
-            return socket.gethostbyname(socket.gethostname())
-        except Exception:
-            return "127.0.0.1"
+        pass
+
+    # Método 2: Socket UDP em direção à rota padrão
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+
+    # Método 3: Resolução de hostname
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+
+    return "127.0.0.1"
 
 
 def make_round_image(pil_img, size):
     """
-    Recorta qualquer imagem em formato quadrado e aplica máscara circular
-    com antialiasing (supersampling) para garantir que seja perfeitamente redonda.
+    Recorta qualquer imagem em formato circular com antialiasing (supersampling),
+    garantindo que o ícone do DTIC seja sempre perfeitamente redondo.
     """
     w, h = pil_img.size
     min_dim = min(w, h)
@@ -98,24 +135,25 @@ class VpnApp:
         self.root = root
         os_label = "Windows" if IS_WINDOWS else "Linux"
         self.root.title(f"FortiClient VPN - DTIC / PRODEPA ({os_label})")
-        self.root.geometry("630x740")
+        self.root.geometry("640x750")
         self.root.resizable(False, False)
         self.root.configure(bg="#f1f5f9")
 
+        # Rastreia se o usuário alterou o IP local manualmente
+        self.user_manually_edited_ip = False
+
         self.setup_window_icon()
 
-        # Cabeçalho Superior com Logo Circular
+        # Cabeçalho Superior com Logo Circular Oficial
         header_frame = tk.Frame(root, bg="#0f172a", height=85)
         header_frame.pack(fill="x")
 
         header_content = tk.Frame(header_frame, bg="#0f172a")
         header_content.pack(pady=12, padx=15)
 
-        # Imagem redonda do logo DTIC no cabeçalho
-        self.logo_label = None
-        if HAS_PIL and hasattr(self, "header_img_tk") and self.header_img_tk:
+        if HAS_PIL and HAS_IMAGETK and hasattr(self, "header_img_tk") and self.header_img_tk:
             self.logo_label = tk.Label(header_content, image=self.header_img_tk, bg="#0f172a")
-            self.logo_label.pack(side="left", padx=(0, 12))
+            self.logo_label.pack(side="left", padx=(0, 14))
         else:
             lbl_badge = tk.Label(header_content, text="🛡️", font=("Helvetica", 24), bg="#0f172a", fg="#ffffff")
             lbl_badge.pack(side="left", padx=(0, 10))
@@ -141,7 +179,7 @@ class VpnApp:
         )
         lbl_sub.pack(anchor="w")
 
-        # Status Visual no topo
+        # Barra de Status no Topo
         status_bar = tk.Frame(root, bg="#ffffff", bd=1, relief="solid")
         status_bar.pack(fill="x", padx=20, pady=(12, 8))
 
@@ -154,7 +192,7 @@ class VpnApp:
         self.lbl_ip_info = tk.Label(status_bar, text="", font=("Helvetica", 9), fg="#64748b", bg="#ffffff")
         self.lbl_ip_info.pack(side="right", padx=15, pady=6)
 
-        # Card de Configurações Editáveis
+        # Card de Configurações de Rede e Credenciais
         config_card = tk.LabelFrame(
             root,
             text=" Configurações de Conexão ",
@@ -166,32 +204,54 @@ class VpnApp:
         )
         config_card.pack(fill="x", padx=20, pady=4)
 
-        # Grid de entradas
+        # 1. Gateway VPN
         tk.Label(config_card, text="Gateway VPN:", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(row=0, column=0, sticky="w", pady=4)
         self.entry_gateway = tk.Entry(config_card, font=("Monospace", 9), width=20)
         self.entry_gateway.grid(row=0, column=1, sticky="w", padx=6, pady=4)
+        self.entry_gateway.bind("<FocusOut>", lambda e: self.on_gateway_changed())
 
-        tk.Label(config_card, text="IP Local:", font=("Helvetica", 9), bg="#ffffff", fg="#334155").grid(row=0, column=2, sticky="w", pady=4)
-        self.entry_local_ip = tk.Entry(config_card, font=("Monospace", 9), width=18)
-        self.entry_local_ip.grid(row=0, column=3, sticky="w", padx=6, pady=4)
+        # 2. IP Local com botão de detecção automática
+        tk.Label(config_card, text="Meu IP Local:", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(row=0, column=2, sticky="w", pady=4)
+        ip_frame = tk.Frame(config_card, bg="#ffffff")
+        ip_frame.grid(row=0, column=3, sticky="w", padx=6, pady=4)
 
+        self.entry_local_ip = tk.Entry(ip_frame, font=("Monospace", 9), width=15)
+        self.entry_local_ip.pack(side="left")
+        self.entry_local_ip.bind("<Key>", lambda e: self.on_ip_manually_edited())
+
+        btn_refresh_ip = tk.Button(
+            ip_frame,
+            text="🔄",
+            font=("Helvetica", 8),
+            bg="#e2e8f0",
+            relief="flat",
+            cursor="hand2",
+            command=self.refresh_auto_ip,
+            title="Redetectar IP Local automaticamente" if hasattr(tk.Button, "title") else None
+        )
+        btn_refresh_ip.pack(side="left", padx=(3, 0))
+
+        # 3. Usuário EAP
         tk.Label(config_card, text="Usuário (EAP):", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(row=1, column=0, sticky="w", pady=4)
         self.entry_user = tk.Entry(config_card, font=("Monospace", 9), width=20)
         self.entry_user.grid(row=1, column=1, sticky="w", padx=6, pady=4)
 
+        # 4. Senha
         tk.Label(config_card, text="Senha:", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(row=1, column=2, sticky="w", pady=4)
         self.entry_pass = tk.Entry(config_card, font=("Monospace", 9), show="•", width=18)
         self.entry_pass.grid(row=1, column=3, sticky="w", padx=6, pady=4)
 
+        # 5. Chave PSK
         tk.Label(config_card, text="Chave PSK:", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(row=2, column=0, sticky="w", pady=4)
         self.entry_psk = tk.Entry(config_card, font=("Monospace", 9), show="•", width=20)
         self.entry_psk.grid(row=2, column=1, sticky="w", padx=6, pady=4)
 
+        # 6. Informação de IP Virtual
         tk.Label(config_card, text="IP Virtual:", font=("Helvetica", 9), bg="#ffffff", fg="#64748b").grid(row=2, column=2, sticky="w", pady=4)
         lbl_vip_info = tk.Label(config_card, text="Dinâmico (CPRP / FortiGate)", font=("Helvetica", 9, "italic"), bg="#ffffff", fg="#059669")
         lbl_vip_info.grid(row=2, column=3, sticky="w", padx=6, pady=4)
 
-        # Opções de visualização de senhas e salvar
+        # Barra de Opções e Salvamento Local
         options_frame = tk.Frame(config_card, bg="#ffffff")
         options_frame.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 2))
 
@@ -268,7 +328,7 @@ class VpnApp:
         )
         self.btn_disconnect.pack(side="right", padx=3, expand=True, fill="x")
 
-        # Barra de Ações Rápidas (Painel Web e Validação de Rede)
+        # Barra de Ações Rápidas (Painel Web e Validação HTTP)
         action_bar = tk.Frame(root, bg="#f1f5f9")
         action_bar.pack(fill="x", padx=20, pady=4)
 
@@ -300,7 +360,7 @@ class VpnApp:
         )
         btn_test_web.pack(side="right", padx=3, expand=True, fill="x")
 
-        # Caixa de Log e Diagnóstico
+        # Caixa de Log e Diagnóstico em Tempo Real
         log_frame = tk.Frame(root, bg="#f1f5f9")
         log_frame.pack(fill="both", padx=20, pady=(8, 14), expand=True)
 
@@ -320,7 +380,7 @@ class VpnApp:
         self.start_auto_refresh()
 
     def setup_window_icon(self):
-        """Carrega a imagem de dtic-logo-whasapp.jpeg recortada redonda como ícone do app e janela."""
+        """Carrega e aplica a imagem oficial DTIC recortada redonda como ícone do app e janela."""
         possible_images = [
             get_resource_path("assets/dtic-logo-whasapp.jpeg"),
             get_resource_path("assets/icon.png"),
@@ -334,10 +394,9 @@ class VpnApp:
                 img_path = p
                 break
 
-        if img_path and HAS_PIL:
+        if img_path and HAS_PIL and HAS_IMAGETK:
             try:
                 base_img = Image.open(img_path)
-                # Sempre aplicar recorte redondo para garantir conformidade
                 round_ico_img = make_round_image(base_img, (64, 64))
                 self.icon_photo = ImageTk.PhotoImage(round_ico_img)
                 self.root.iconphoto(True, self.icon_photo)
@@ -353,7 +412,6 @@ class VpnApp:
             except Exception:
                 pass
 
-        # No Windows, define também iconbitmap se existir arquivo .ico
         if IS_WINDOWS:
             ico_path = get_resource_path("assets/icon.ico")
             if os.path.exists(ico_path):
@@ -363,6 +421,7 @@ class VpnApp:
                     pass
 
     def get_config_dir(self):
+        """Retorna o caminho seguro do diretório de configurações conforme o SO."""
         if IS_WINDOWS:
             base = os.environ.get("APPDATA", os.path.expanduser("~"))
             path = os.path.join(base, "FortiClientVPN")
@@ -386,23 +445,55 @@ class VpnApp:
     def clear_log(self):
         self.log_text.delete("1.0", tk.END)
 
-    def load_initial_config(self):
-        # 1. Tenta carregar do arquivo de configuração do usuário (~/.config/forticlient-vpn/config.json)
-        cfg_path = self.get_config_path()
-        loaded = False
+    def on_ip_manually_edited(self):
+        self.user_manually_edited_ip = True
 
+    def on_gateway_changed(self):
+        if not self.user_manually_edited_ip:
+            self.refresh_auto_ip()
+
+    def refresh_auto_ip(self):
+        gw = self.entry_gateway.get().strip() or "198.51.100.100"
+        detected_ip = detect_local_ip(gw)
+        self.entry_local_ip.delete(0, tk.END)
+        self.entry_local_ip.insert(0, detected_ip)
+        self.user_manually_edited_ip = False
+        self.lbl_ip_info.config(text=f"Origem: {detected_ip} (Automático)")
+        self.log(f"IP local detectado automaticamente: {detected_ip}")
+
+    def load_initial_config(self):
+        """
+        Carrega as credenciais e configurações salvas do usuário.
+        O IP local é sempre obtido automaticamente por padrão, a menos que
+        o usuário tenha definido explicitamente um IP customizado.
+        """
+        cfg_path = self.get_config_path()
         default_gw = "198.51.100.100"
-        detected_ip = get_default_local_ip(default_gw)
+
+        # 1. Obter IP local automaticamente na primeira instância
+        detected_ip = detect_local_ip(default_gw)
 
         if os.path.exists(cfg_path):
             try:
                 with open(cfg_path, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
-                self.entry_gateway.delete(0, tk.END)
-                self.entry_gateway.insert(0, cfg.get("gateway", default_gw))
 
-                self.entry_local_ip.delete(0, tk.END)
-                self.entry_local_ip.insert(0, cfg.get("local_ip", detected_ip))
+                gw = cfg.get("gateway", default_gw)
+                self.entry_gateway.delete(0, tk.END)
+                self.entry_gateway.insert(0, gw)
+
+                # Se o usuário salvou uma personalização explícita de IP manual:
+                saved_manual_ip = cfg.get("custom_local_ip")
+                if saved_manual_ip:
+                    self.entry_local_ip.delete(0, tk.END)
+                    self.entry_local_ip.insert(0, saved_manual_ip)
+                    self.user_manually_edited_ip = True
+                    self.lbl_ip_info.config(text=f"Origem: {saved_manual_ip} (Manual)")
+                else:
+                    self.entry_local_ip.delete(0, tk.END)
+                    self.entry_local_ip.insert(0, detected_ip)
+                    self.user_manually_edited_ip = False
+                    self.lbl_ip_info.config(text=f"Origem: {detected_ip} (Automático)")
 
                 self.entry_user.delete(0, tk.END)
                 self.entry_user.insert(0, cfg.get("user", ""))
@@ -414,34 +505,20 @@ class VpnApp:
                 self.entry_psk.insert(0, cfg.get("psk", ""))
 
                 self.var_save_creds.set(cfg.get("save_credentials", True))
-                loaded = True
                 self.log("Configurações salvas do usuário carregadas com sucesso.")
+                return
             except Exception as e:
                 self.log(f"Aviso ao ler configurações salvas: {e}")
 
-        # Se não tiver arquivo de config, preenche campos padrão de rede
-        if not loaded:
-            self.entry_gateway.delete(0, tk.END)
-            self.entry_gateway.insert(0, default_gw)
+        # Primeira execução (sem config prévia salva)
+        self.entry_gateway.delete(0, tk.END)
+        self.entry_gateway.insert(0, default_gw)
 
-            self.entry_local_ip.delete(0, tk.END)
-            self.entry_local_ip.insert(0, detected_ip)
-
-            # Fallback opcional no Linux: ler swanctl existente sem expor credenciais
-            if IS_LINUX and os.path.exists(CONF_FILE_LINUX):
-                try:
-                    with open(CONF_FILE_LINUX, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    gw = re.search(r"remote_addrs\s*=\s*([^\s\n]+)", content)
-                    if gw and not self.entry_gateway.get():
-                        self.entry_gateway.insert(0, gw.group(1))
-                    usr = re.search(r'eap-forticlient\s*\{[^}]*id\s*=\s*([^\s\n]+)', content)
-                    if usr and not self.entry_user.get():
-                        self.entry_user.insert(0, usr.group(1))
-                except Exception:
-                    pass
-
-        self.lbl_ip_info.config(text=f"Origem: {self.entry_local_ip.get()}")
+        self.entry_local_ip.delete(0, tk.END)
+        self.entry_local_ip.insert(0, detected_ip)
+        self.user_manually_edited_ip = False
+        self.lbl_ip_info.config(text=f"Origem: {detected_ip} (Automático)")
+        self.log(f"IP local detectado automaticamente na inicialização: {detected_ip}")
 
     def save_user_config(self, notify=True):
         if not self.var_save_creds.get():
@@ -452,29 +529,29 @@ class VpnApp:
                 except Exception:
                     pass
             if notify:
-                messagebox.showinfo("Configurações", "Opção de salvar desmarcada. Dados anteriores removidos.")
+                messagebox.showinfo("Configurações", "Opção de salvar desmarcada. Dados locais anteriores removidos.")
             return
 
         cfg = {
             "gateway": self.entry_gateway.get().strip(),
-            "local_ip": self.entry_local_ip.get().strip(),
             "user": self.entry_user.get().strip(),
             "password": self.entry_pass.get().strip(),
             "psk": self.entry_psk.get().strip(),
-            "save_credentials": True
+            "save_credentials": True,
+            # Se o usuário editou manualmente, salva o IP; caso contrário salva vazio para manter auto-detecção
+            "custom_local_ip": self.entry_local_ip.get().strip() if self.user_manually_edited_ip else ""
         }
 
         try:
             cfg_path = self.get_config_path()
             with open(cfg_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2)
-            
-            # No Linux, restringir permissões para 0600 (apenas o próprio usuário pode ler)
+
             if IS_LINUX:
                 os.chmod(cfg_path, 0o600)
 
             if notify:
-                self.log("✓ Configurações e credenciais salvas localmente com sucesso.")
+                self.log("✓ Configurações salvas com sucesso.")
                 messagebox.showinfo("Configurações", "Configurações salvas localmente com sucesso!")
         except Exception as e:
             self.log(f"Erro ao salvar configurações locais: {e}")
@@ -488,9 +565,16 @@ class VpnApp:
         webbrowser.open(WEB_URL)
 
     def is_connected(self):
+        """Verifica o status da VPN de forma nativa e isolada por sistema operacional."""
         if IS_WINDOWS:
             try:
-                out = subprocess.check_output(["rasdial"], stderr=subprocess.STDOUT, text=True)
+                out = subprocess.check_output(
+                    ["rasdial"],
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    errors="replace",
+                    creationflags=WIN_CREATE_NO_WINDOW
+                )
                 return VPN_NAME_WIN.lower() in out.lower(), "Ativo"
             except Exception:
                 return False, None
@@ -521,7 +605,8 @@ class VpnApp:
         else:
             self.lbl_status_icon.config(fg="#ef4444")
             self.lbl_status_text.config(text="DESCONECTADO", fg="#ef4444")
-            self.lbl_ip_info.config(text=f"Origem: {self.entry_local_ip.get()}")
+            mode = "Manual" if self.user_manually_edited_ip else "Auto"
+            self.lbl_ip_info.config(text=f"Origem: {self.entry_local_ip.get()} ({mode})")
             self.btn_connect.config(state="normal", bg="#16a34a")
             self.btn_disconnect.config(state="disabled", bg="#94a3b8")
 
@@ -536,6 +621,7 @@ class VpnApp:
         threading.Thread(target=loop, daemon=True).start()
 
     def save_conf_linux(self):
+        """Gera configuração swanctl exclusiva para Linux, apenas com credenciais fornecidas na GUI."""
         gw = self.entry_gateway.get().strip()
         local_ip = self.entry_local_ip.get().strip()
         user = self.entry_user.get().strip()
@@ -596,22 +682,30 @@ secrets {{
         subprocess.run(["sudo", "swanctl", "--load-all"], capture_output=True)
 
     def ensure_windows_vpn_configured(self, gw):
-        """Garante que a conexão IKEv2 no Windows está criada com cifras apropriadas."""
-        ps_check = f"(Get-VpnConnection -Name '{VPN_NAME_WIN}' -ErrorAction SilentlyContinue) -ne $null"
-        check_proc = subprocess.run(["powershell", "-NoProfile", "-Command", ps_check], capture_output=True, text=True)
-        if "True" not in check_proc.stdout:
-            self.log(f"Criando conexão VPN '{VPN_NAME_WIN}' no Windows...")
-            ps_cmd = f"""
+        """
+        Configura o perfil nativo IKEv2 no Windows utilizando PowerShell nativo,
+        sem comandos bash ou utilitários Unix (como cat ou tee).
+        """
+        ps_script = f"""
+        $ErrorActionPreference = 'SilentlyContinue'
+        $existing = Get-VpnConnection -Name '{VPN_NAME_WIN}'
+        if (-not $existing) {{
             Add-VpnConnection -Name '{VPN_NAME_WIN}' -ServerAddress '{gw}' -TunnelType 'IKEv2' -AuthenticationMethod 'EAP' -EncryptionLevel 'Required' -SplitTunneling $true -Force
             Set-VpnConnectionIPsecConfiguration -ConnectionName '{VPN_NAME_WIN}' -AuthenticationTransformConstants GCMAES256 -CipherTransformConstants GCMAES256 -EncryptionMethod AES256 -IntegrityCheckMethod SHA256 -DHGroup Group18 -PfsGroup PFS2048 -Force
-            """
-            subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, text=True)
+        }}
+        """
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            creationflags=WIN_CREATE_NO_WINDOW
+        )
 
     def on_connect(self):
         gw = self.entry_gateway.get().strip()
         user = self.entry_user.get().strip()
         pwd = self.entry_pass.get().strip()
-        psk = self.entry_psk.get().strip()
 
         if not user or not pwd:
             messagebox.showwarning("Campos Obrigatórios", "Por favor, preencha Usuário e Senha para conectar.")
@@ -628,14 +722,20 @@ secrets {{
                 try:
                     self.ensure_windows_vpn_configured(gw)
                     cmd = ["rasdial", VPN_NAME_WIN, user, pwd]
-                    proc = subprocess.run(cmd, capture_output=True, text=True)
+                    proc = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        errors="replace",
+                        creationflags=WIN_CREATE_NO_WINDOW
+                    )
                     if proc.returncode == 0:
                         self.root.after(0, lambda: self.log("✓ SUCESSO: VPN CONECTADA no Windows!"))
                     else:
                         out = proc.stdout.strip() or proc.stderr.strip()
                         self.root.after(0, lambda: self.log(f"✗ Falha Windows: {out[:120]}"))
                 except Exception as e:
-                    self.root.after(0, lambda: self.log(f"✗ Erro Windows: {e}"))
+                    self.root.after(0, lambda: self.log(f"✗ Erro de execução no Windows: {e}"))
             else:
                 self.save_conf_linux()
                 subprocess.run(["sudo", "ip", "rule", "add", "lookup", "220", "pref", "220"], capture_output=True)
@@ -669,7 +769,13 @@ secrets {{
 
         def run():
             if IS_WINDOWS:
-                subprocess.run(["rasdial", VPN_NAME_WIN, "/disconnect"], capture_output=True)
+                subprocess.run(
+                    ["rasdial", VPN_NAME_WIN, "/disconnect"],
+                    capture_output=True,
+                    text=True,
+                    errors="replace",
+                    creationflags=WIN_CREATE_NO_WINDOW
+                )
             else:
                 subprocess.run(["sudo", "swanctl", "--terminate", "--ike", CHILD_NAME], capture_output=True)
 
@@ -691,7 +797,7 @@ secrets {{
                     with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
                         code = resp.getcode()
                 except urllib.error.HTTPError as e:
-                    code = e.code # 401, 403, 405 indicam que o servidor web está online!
+                    code = e.code # Códigos HTTP como 401, 403 indicam que o servidor web interno respondeu
 
                 if code in (200, 401, 403, 405):
                     self.root.after(0, lambda: self.log(f"✓ ACESSO CONFIRMADO! Código HTTP {code} OK (Painel FortiOS online)"))

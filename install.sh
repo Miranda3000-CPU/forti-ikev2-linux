@@ -19,7 +19,7 @@ echo -e "${BLUE}======================================================${RESET}"
 echo -e "\n${YELLOW}[1/4] Verificando e instalando dependências...${RESET}"
 if command -v apt-get &> /dev/null; then
     sudo apt-get update -qq
-    sudo apt-get install -y strongswan strongswan-swanctl charon-systemd libstrongswan-extra-plugins libcharon-extra-plugins python3-tk python3-pil curl
+    sudo apt-get install -y strongswan strongswan-swanctl charon-systemd libstrongswan-extra-plugins libcharon-extra-plugins python3-tk python3-pil python3-pil.imagetk curl
 elif command -v dnf &> /dev/null; then
     sudo dnf install -y strongswan python3-tkinter python3-pillow curl
 elif command -v pacman &> /dev/null; then

@@ -57,7 +57,7 @@ Section: net
 Priority: optional
 Architecture: all
 Maintainer: DTIC Bombeiros <dtic@bombeiros.pa.gov.br>
-Depends: strongswan, strongswan-swanctl, libcharon-extra-plugins, python3, python3-tk, python3-pil
+Depends: strongswan, strongswan-swanctl, libcharon-extra-plugins, python3, python3-tk, python3-pil, python3-pil.imagetk
 Description: FortiClient IKEv2 VPN Manager GUI
  Interface Grafica nativa em Python/Tkinter para gerenciamento e conexao
  a VPNs corporativas FortiGate utilizando protocolo IKEv2 / IPsec com EAP-MSCHAPv2.
