@@ -13,10 +13,18 @@ Write-Host "========================================================" -Foregroun
 $VpnName = "FortiClient-VPN"
 $ServerAddress = "198.51.100.100"
 
-# 1. Verificar se está rodando como Administrador
+# 1. Verificar se está rodando como Administrador (solicitar elevação automática se necessário)
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    Write-Host "[!] Por favor, execute este script como Administrador no PowerShell." -ForegroundColor Yellow
+    Write-Host "[*] Solicitando permissões de Administrador do Windows..." -ForegroundColor Yellow
+    try {
+        Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+        exit 0
+    } catch {
+        Write-Host "[!] Não foi possível elevar automaticamente. Execute o PowerShell como Administrador." -ForegroundColor Red
+        pause
+        exit 1
+    }
 }
 
 # 2. Criar ou atualizar a Conexão VPN nativa do Windows
