@@ -750,14 +750,17 @@ secrets {{
                 if proc.returncode == 0 and connected:
                     self.root.after(0, lambda: self.log(f"✓ SUCESSO: VPN CONECTADA! IP Virtual atribuído: {vip}"))
                 else:
-                    if "retransmit" in clean_output.lower():
+                    lower_output = clean_output.lower()
+                    if "authentication_failure" in lower_output or "authentication failed" in lower_output or "eap_mschapv2 method failed" in lower_output or "auth_failed" in lower_output:
+                        self.root.after(0, lambda: self.log("✗ Falha de Autenticação: Verifique sua senha (sem caracteres adicionais como #) ou usuário."))
+                    elif "retransmit" in lower_output or "timed out" in lower_output:
                         self.root.after(0, lambda: self.log(f"✗ Timeout: Sem resposta do Gateway {gw} na porta 500."))
-                    elif "NO_PROPOSAL_CHOSEN" in clean_output:
+                    elif "no_proposal_chosen" in lower_output:
                         self.root.after(0, lambda: self.log("✗ FortiGate respondeu NO_PROPOSAL_CHOSEN."))
-                    elif "AUTHENTICATION_FAILED" in clean_output:
-                        self.root.after(0, lambda: self.log("✗ Falha de autenticação: Verifique usuário, senha ou PSK."))
                     else:
-                        self.root.after(0, lambda: self.log(f"✗ Retorno swanctl: {clean_output.strip()[:140]}"))
+                        err_lines = [l.strip() for l in lines if l.strip() and not l.startswith("[NET]") and not l.startswith("[ENC]")]
+                        last_err = " | ".join(err_lines[-3:]) if err_lines else clean_output.strip()[:140]
+                        self.root.after(0, lambda: self.log(f"✗ Falha ao conectar: {last_err[:160]}"))
 
             self.root.after(0, self.update_status)
 
