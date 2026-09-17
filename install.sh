@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Script de Instalação do FortiClient VPN Manager para Linux (Ubuntu / Debian)
+# Script de Instalação do FortiClient VPN GUI para Linux (Ubuntu / Debian)
 
 set -e
 
@@ -9,7 +9,7 @@ YELLOW="\033[1;33m"
 RESET="\033[0m"
 
 echo -e "${BLUE}======================================================${RESET}"
-echo -e "${BLUE}    Instalador do FortiClient VPN Manager (Linux)     ${RESET}"
+echo -e "${BLUE}    Instalador do FortiClient VPN GUI (Linux)         ${RESET}"
 echo -e "${BLUE}======================================================${RESET}"
 
 # 1. Instalar dependências necessárias
@@ -17,11 +17,10 @@ echo -e "\n${YELLOW}[1/5] Verificando e instalando dependências do sistema...${
 sudo apt-get update -qq
 sudo apt-get install -y strongswan strongswan-swanctl charon-systemd libstrongswan-extra-plugins libcharon-extra-plugins python3-tk curl
 
-# 2. Copiar scripts para /usr/local/bin
-echo -e "\n${YELLOW}[2/5] Instalando utilitários executáveis em /usr/local/bin...${RESET}"
-sudo cp bin/vpn /usr/local/bin/vpn
+# 2. Copiar aplicativo para /usr/local/bin
+echo -e "\n${YELLOW}[2/5] Instalando executável da interface gráfica em /usr/local/bin...${RESET}"
 sudo cp bin/vpn-gui /usr/local/bin/vpn-gui
-sudo chmod +x /usr/local/bin/vpn /usr/local/bin/vpn-gui
+sudo chmod +x /usr/local/bin/vpn-gui
 
 # 3. Configurar diretório de configuração do swanctl
 echo -e "\n${YELLOW}[3/5] Verificando configuração em /etc/swanctl/conf.d/...${RESET}"
@@ -58,7 +57,7 @@ sudo swanctl --load-all >/dev/null 2>&1 || true
 echo -e "\n${GREEN}======================================================${RESET}"
 echo -e "${GREEN}        Instalação concluída com sucesso!             ${RESET}"
 echo -e "${GREEN}======================================================${RESET}"
-echo -e "Você já pode utilizar:"
-echo -e "  • Interface Gráfica : execute ${YELLOW}vpn-gui${RESET} ou clique no atalho na Área de Trabalho"
-echo -e "  • Linha de Comando  : execute ${YELLOW}vpn connect${RESET}, ${YELLOW}vpn status${RESET}, ${YELLOW}vpn test${RESET}"
+echo -e "Você já pode abrir o aplicativo:"
+echo -e "  • Pelo atalho na Área de Trabalho: ${YELLOW}FortiClient VPN${RESET}"
+echo -e "  • Pelo terminal: ${YELLOW}vpn-gui${RESET}"
 echo ""

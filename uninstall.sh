@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Script de Desinstalação do FortiClient VPN Manager para Linux
+# Script de Desinstalação do FortiClient VPN GUI para Linux
 
 set -e
 
@@ -9,7 +9,7 @@ YELLOW="\033[1;33m"
 RESET="\033[0m"
 
 echo -e "${RED}======================================================${RESET}"
-echo -e "${RED}   Desinstalador do FortiClient VPN Manager (Linux)   ${RESET}"
+echo -e "${RED}   Desinstalador do FortiClient VPN GUI (Linux)       ${RESET}"
 echo -e "${RED}======================================================${RESET}"
 
 # Encerrar VPN se estiver ativa
@@ -18,9 +18,9 @@ if sudo swanctl --list-sas 2>/dev/null | grep -q "ESTABLISHED"; then
     sudo swanctl --terminate --ike forticlient 2>/dev/null || true
 fi
 
-# Remover binários
-echo -e "${YELLOW}[*] Removendo utilitários de /usr/local/bin...${RESET}"
-sudo rm -f /usr/local/bin/vpn /usr/local/bin/vpn-gui
+# Remover binário
+echo -e "${YELLOW}[*] Removendo executável /usr/local/bin/vpn-gui...${RESET}"
+sudo rm -f /usr/local/bin/vpn-gui /usr/local/bin/vpn
 
 # Remover atalhos
 echo -e "${YELLOW}[*] Removendo atalhos do desktop...${RESET}"
