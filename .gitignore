@@ -20,6 +20,8 @@ config.json
 
 # Compilação e empacotamento
 build/
+dist/
+distribuir/linux/*.deb
 *.spec.bak
 
 # Logs do sistema e temporários

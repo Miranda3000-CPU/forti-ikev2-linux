@@ -1,0 +1,19 @@
+╔══════════════════════════════════════════════════════════╗
+║     FortiClient VPN — Executável para Windows            ║
+╚══════════════════════════════════════════════════════════╝
+
+ COMO USAR:
+
+   1. Basta dar duplo-clique em:
+      FortiClient-VPN.exe
+
+   2. O programa abre diretamente!
+      • Não precisa instalar Python
+      • Não depende do código fonte
+      • Totalmente portátil e independente
+
+ REQUISITOS:
+   • Windows 10 ou Windows 11 (64-bit)
+
+ SUPORTE:
+   DTIC - dtic@bombeiros.pa.gov.br
