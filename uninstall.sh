@@ -30,10 +30,11 @@ rm -f "$HOME/.local/share/applications/forticlient-vpn.desktop"
 rm -f "$HOME/Área de trabalho/FortiClient-VPN.desktop"
 rm -f "$HOME/Desktop/FortiClient-VPN.desktop"
 
-read -p "Deseja remover também as configurações (/etc/swanctl/conf.d/forti.conf)? (s/N): " resp
+read -p "Deseja remover também as configurações (/etc/swanctl/conf.d/forti.conf e regras sudoers)? (s/N): " resp
 if [[ "$resp" =~ ^[sS]$ ]]; then
     sudo rm -f /etc/swanctl/conf.d/forti.conf
-    echo -e "${YELLOW}[*] Configurações removidas.${RESET}"
+    sudo rm -f /etc/sudoers.d/forticlient-vpn
+    echo -e "${YELLOW}[*] Configurações e regras sudoers removidas.${RESET}"
 else
     echo -e "${GREEN}[*] Configurações mantidas em /etc/swanctl/conf.d/forti.conf.${RESET}"
 fi

@@ -59,6 +59,7 @@ Set-VpnConnectionIPsecConfiguration -ConnectionName $VpnName `
 $DesktopPath = [Environment]::GetFolderPath("Desktop")
 $ShortcutPath = "$DesktopPath\FortiClient VPN.lnk"
 
+$cmdCandidate = "$PSScriptRoot\iniciar_vpn.cmd"
 $exeCandidate1 = "$PSScriptRoot\dist\FortiClient-VPN.exe"
 $exeCandidate2 = "$PSScriptRoot\FortiClient-VPN.exe"
 $IconPath = "$PSScriptRoot\assets\icon.ico"
@@ -66,7 +67,10 @@ $IconPath = "$PSScriptRoot\assets\icon.ico"
 $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
 
-if (Test-Path $exeCandidate1) {
+if (Test-Path $cmdCandidate) {
+    $Shortcut.TargetPath = $cmdCandidate
+    $Shortcut.WorkingDirectory = "$PSScriptRoot"
+} elseif (Test-Path $exeCandidate1) {
     $Shortcut.TargetPath = $exeCandidate1
     $Shortcut.WorkingDirectory = "$PSScriptRoot\dist"
 } elseif (Test-Path $exeCandidate2) {

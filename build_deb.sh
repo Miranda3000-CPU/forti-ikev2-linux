@@ -314,7 +314,8 @@ echo -e "${GREEN}  ✓ Wrapper criado com verificações de ambiente${RESET}"
 echo -e "\n${YELLOW}[6/8] Copiando aplicação e recursos...${RESET}"
 
 cp vpn-gui.py "$BUILD_ROOT/usr/share/$PKG_NAME/"
-chmod 755 "$BUILD_ROOT/usr/share/$PKG_NAME/vpn-gui.py"
+cp iniciar_linux.sh "$BUILD_ROOT/usr/share/$PKG_NAME/"
+chmod 755 "$BUILD_ROOT/usr/share/$PKG_NAME/vpn-gui.py" "$BUILD_ROOT/usr/share/$PKG_NAME/iniciar_linux.sh"
 
 # Copiar todos os assets
 cp -r assets/* "$BUILD_ROOT/usr/share/$PKG_NAME/assets/"

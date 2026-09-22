@@ -41,11 +41,27 @@ forticlient-vpn-linux/
 
 ---
 
-# 🐧 Instalação no LINUX
+# 🐧 Instalação e Execução no LINUX
 
 Compatível com **Ubuntu (20.04+)**, **Debian (11+)**, **Linux Mint**, **Pop!_OS**, **Fedora** e **Arch**.
 
-### Opção 1: Instalação via Pacote `.deb` (Recomendada para Debian / Ubuntu)
+### Opção 1: Inicialização Simplificada e Anti-Interferência (Recomendada)
+
+Ideal para desenvolvimento e ambientes corporativos com antivírus/EDR:
+
+```bash
+chmod +x iniciar_linux.sh
+./iniciar_linux.sh
+```
+
+O `iniciar_linux.sh`:
+- Diagnostica e satisfaz automaticamente todas as dependências do sistema (`strongswan`, `python3-tk`, `python3-pil`).
+- Configura as permissões estritas em `/etc/sudoers.d/forticlient-vpn` validadas com `visudo -cf`, evitando travamento de interface gráfica por falta de TTY e prevenindo alertas heurísticos de antivírus.
+- Cria o atalho oficial na Área de Trabalho (`FortiClient-VPN.desktop`) com o ícone DTIC já marcado como confiável.
+
+---
+
+### Opção 2: Instalação via Pacote `.deb` (Debian / Ubuntu)
 
 Você pode instalar o pacote diretamente gerado na pasta `dist/`:
 
@@ -57,53 +73,48 @@ Você pode instalar o pacote diretamente gerado na pasta `dist/`:
 sudo apt install ./dist/forticlient-vpn_1.0.0_all.deb
 ```
 
-Ao instalar o `.deb`:
-- O comando `forticlient-vpn` fica disponível globalmente no sistema.
-- O atalho com o **ícone redondo oficial DTIC** é adicionado ao menu de aplicativos e pode ser fixado na barra de tarefas.
-- As dependências de rede (`strongswan`, `strongswan-swanctl`) e Python são configuradas automaticamente.
-
 ---
 
-### Opção 2: Instalação via Script (`install.sh`)
-
-Caso prefira instalar via script em qualquer distribuição:
+### Opção 3: Instalação Completa via Script (`install.sh`)
 
 ```bash
-chmod +x install.sh uninstall.sh vpn-gui.py build_deb.sh
+chmod +x install.sh uninstall.sh vpn-gui.py build_deb.sh iniciar_linux.sh
 ./install.sh
 ```
 
 ---
 
-# 🪟 Instalação e Executável no WINDOWS
+# 🪟 Instalação e Execução no WINDOWS
 
 Compatível com **Windows 10** e **Windows 11**.
 
-### Opção 1: Gerar e Rodar como Programa Executável (`.exe`)
+### Opção 1: Execução via Código-Fonte com Atalho Administrador (Recomendada contra Antivírus)
 
-1. No Windows, clone o repositório ou baixe os arquivos.
-2. Dê um duplo-clique no arquivo **`build_windows.bat`** (ou execute via Prompt de Comando):
-   ```cmd
-   build_windows.bat
-   ```
-3. O script irá instalar o `Pillow` e `PyInstaller` e compilar o executável com o **ícone oficial redondo DTIC** em:
-   ```text
-   dist\FortiClient-VPN.exe
-   ```
-4. Basta mover o **`FortiClient-VPN.exe`** para onde desejar (Área de Trabalho, Arquivos de Programas, etc.) e executá-lo diretamente com 2 cliques, **sem precisar abrir terminal nem instalar Python em outros computadores**.
+Esta abordagem **elimina 100% dos falsos positivos** causados por empacotadores binários (PyInstaller), executando o código legítimo diretamente:
+
+1. Dê um duplo-clique no arquivo **`criar_atalho_windows.bat`**.
+2. Um atalho oficial chamado **`FortiClient VPN`** com o ícone DTIC será criado na sua Área de Trabalho.
+3. Ao clicar no atalho:
+   - O Windows abre a janela UAC solicitando privilégios de Administrador.
+   - O terminal CMD verifica a presença do Python e instala automaticamente todas as dependências (`pip install -r requirements.txt`).
+   - O perfil nativo IKEv2 / Diffie-Hellman Group 18 é validado no subsistema de rede.
+   - A aplicação gráfica é iniciada com autoridade administrativa total, permitindo a conexão imediata.
 
 ---
 
-### Opção 2: Configuração Rápida do Perfil de Rede (PowerShell)
+### Opção 2: Gerar Executável Portátil (`.exe`)
 
-Execute no PowerShell como Administrador para registrar a conexão IKEv2 com as cifras seguras (Diffie-Hellman Group 18 / MODP_8192):
+1. Dê um duplo-clique no arquivo **`build_windows.bat`**.
+2. O executável será compilado em `dist\FortiClient-VPN.exe`.
+
+---
+
+### Opção 3: Configuração do Perfil de Rede via PowerShell
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\install.ps1
 ```
-
-O `install.ps1` detecta automaticamente se o `FortiClient-VPN.exe` existe e cria o atalho oficial na Área de Trabalho.
 
 ---
 

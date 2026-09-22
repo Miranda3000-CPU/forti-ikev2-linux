@@ -124,5 +124,57 @@ class TestCrossPlatformValidation(unittest.TestCase):
         self.assertIn("FortiClient-VPN", decoded)
         print("  [OK] Decodificação resiliente de saída Windows validada.")
 
+    def test_windows_launcher_and_shortcut_generator(self):
+        """Valida que os scripts Windows possuem elevação UAC, resolução de dependências e caminhos corretos."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        launcher_cmd = os.path.join(base_dir, "iniciar_vpn.cmd")
+        shortcut_bat = os.path.join(base_dir, "criar_atalho_windows.bat")
+
+        self.assertTrue(os.path.exists(launcher_cmd), "iniciar_vpn.cmd deve existir")
+        self.assertTrue(os.path.exists(shortcut_bat), "criar_atalho_windows.bat deve existir")
+
+        with open(launcher_cmd, "r", encoding="utf-8", errors="replace") as f:
+            content_launcher = f.read()
+
+        # Validação UAC e elevação
+        self.assertIn("net session", content_launcher)
+        self.assertIn("-Verb RunAs", content_launcher)
+        # Validação de resolução de dependências
+        self.assertIn("requirements.txt", content_launcher)
+        self.assertIn("Pillow", content_launcher)
+        # Validação de perfil VPN
+        self.assertIn("FortiClient-VPN", content_launcher)
+        self.assertIn("Group18", content_launcher)
+        # Execução final do script
+        self.assertIn("vpn-gui.py", content_launcher)
+
+        with open(shortcut_bat, "r", encoding="utf-8", errors="replace") as f:
+            content_shortcut = f.read()
+
+        self.assertIn("iniciar_vpn.cmd", content_shortcut)
+        self.assertIn("icon.ico", content_shortcut)
+        self.assertIn("CreateShortcut", content_shortcut)
+        print("  [OK] Lançador Windows e criador de atalho UAC validados com sucesso.")
+
+    def test_linux_launcher_integrity_and_security(self):
+        """Valida que o iniciar_linux.sh possui verificações estritas, regras seguras e suporte a flags."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        launcher_sh = os.path.join(base_dir, "iniciar_linux.sh")
+
+        self.assertTrue(os.path.exists(launcher_sh), "iniciar_linux.sh deve existir")
+        self.assertTrue(os.access(launcher_sh, os.X_OK), "iniciar_linux.sh deve ser executável")
+
+        with open(launcher_sh, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        self.assertIn("set -euo pipefail", content)
+        self.assertIn("swanctl", content)
+        self.assertIn("/etc/sudoers.d/forticlient-vpn", content)
+        self.assertIn("visudo", content)
+        self.assertIn("FortiClient-VPN.desktop", content)
+        self.assertIn("--check", content)
+        self.assertIn("--setup-only", content)
+        print("  [OK] Lançador Linux, integridade de segurança e sudoers validados.")
+
 if __name__ == "__main__":
     unittest.main()
