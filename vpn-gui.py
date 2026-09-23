@@ -107,6 +107,96 @@ def detect_local_ip(target_gw="198.51.100.100"):
     return "127.0.0.1"
 
 
+def is_windows_admin():
+    """Verifica se o processo atual possui privilégios de administrador no Windows."""
+    if not IS_WINDOWS:
+        return False
+    try:
+        import ctypes
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+
+def get_windows_phonebook_path():
+    """
+    Localiza o arquivo rasphone.pbk que contém a conexão VPN_NAME_WIN.
+    Verifica primeiro no catálogo global (%ProgramData%) e no catálogo do usuário (%APPDATA%).
+    Retorna o caminho do arquivo .pbk se encontrado.
+    """
+    if not IS_WINDOWS:
+        return None
+
+    target_header = f"[{VPN_NAME_WIN}]".lower()
+    search_dirs = []
+
+    # 1. Catálogo do sistema (All Users / ProgramData)
+    prog_data = os.environ.get("ProgramData", os.environ.get("ALLUSERSPROFILE", r"C:\ProgramData"))
+    if prog_data:
+        search_dirs.append(os.path.join(prog_data, "Microsoft", "Network", "Connections", "Pbk", "rasphone.pbk"))
+
+    # 2. Catálogo do usuário atual (%APPDATA%)
+    app_data = os.environ.get("APPDATA")
+    if app_data:
+        search_dirs.append(os.path.join(app_data, "Microsoft", "Network", "Connections", "Pbk", "rasphone.pbk"))
+
+    # 3. Fallback System32/Ras
+    sys_root = os.environ.get("SystemRoot", r"C:\Windows")
+    search_dirs.append(os.path.join(sys_root, "System32", "Ras", "rasphone.pbk"))
+
+    # Procurar primeiro o arquivo que realmente contém a seção da VPN
+    for pbk_file in search_dirs:
+        if os.path.isfile(pbk_file):
+            try:
+                with open(pbk_file, "r", encoding="utf-8", errors="ignore") as f:
+                    if target_header in f.read().lower():
+                        return pbk_file
+            except Exception:
+                pass
+
+    # Se ainda não houver seção registrada, retornar o arquivo global existente
+    for pbk_file in search_dirs:
+        if os.path.isfile(pbk_file):
+            return pbk_file
+
+    return None
+
+
+def parse_windows_rasdial_error(output_text):
+    """Extrai mensagem de erro legível e amigável da saída do rasdial."""
+    clean_lines = [l.strip() for l in output_text.splitlines() if l.strip()]
+    meaningful = [
+        l for l in clean_lines
+        if not l.lower().startswith("conectando")
+        and not l.lower().startswith("connecting")
+        and not l.lower().startswith("verificando")
+        and not l.lower().startswith("verifying")
+        and not l.lower().startswith("para obter mais")
+        and not l.lower().startswith("for more help")
+    ]
+    detail = " | ".join(meaningful) if meaningful else output_text[:140]
+    lower = output_text.lower()
+
+    if "623" in lower or "catálogo" in lower or "phone book" in lower:
+        return (
+            f"Erro 623: Perfil '{VPN_NAME_WIN}' não encontrado no catálogo telefônico do Windows (rasphone.pbk). "
+            f"Execute iniciar_vpn.cmd como Administrador para registrar a conexão."
+        )
+    elif "691" in lower or "autenticação" in lower or "authentication" in lower:
+        return "Falha de Autenticação (Erro 691): Usuário ou senha incorretos."
+    elif "809" in lower or "tempo limite" in lower or "timed out" in lower:
+        return "Erro 809: Gateway VPN não respondeu nas portas UDP 500/4500 (verifique rede/firewall)."
+    elif "800" in lower:
+        return "Erro 800: Falha ao alcançar o servidor VPN. Verifique o Gateway e a Internet."
+    elif "789" in lower:
+        return "Erro 789: Incompatibilidade de cifras IPsec (Group18/GCMAES256 requerido)."
+    elif "720" in lower:
+        return "Erro 720: Falha nos protocolos de controle PPP no Windows."
+    else:
+        return f"Falha Windows: {detail[:150]}"
+
+
+
 def make_round_image(pil_img, size):
     """
     Recorta qualquer imagem em formato circular com antialiasing (supersampling),
@@ -684,23 +774,84 @@ secrets {{
     def ensure_windows_vpn_configured(self, gw):
         """
         Configura o perfil nativo IKEv2 no Windows utilizando PowerShell nativo,
-        sem comandos bash ou utilitários Unix (como cat ou tee).
+        com suporte a catálogo AllUserConnection e elevação UAC transparente se necessário.
         """
-        ps_script = f"""
-        $ErrorActionPreference = 'SilentlyContinue'
-        $existing = Get-VpnConnection -Name '{VPN_NAME_WIN}'
-        if (-not $existing) {{
-            Add-VpnConnection -Name '{VPN_NAME_WIN}' -ServerAddress '{gw}' -TunnelType 'IKEv2' -AuthenticationMethod 'EAP' -EncryptionLevel 'Required' -SplitTunneling $true -Force
-            Set-VpnConnectionIPsecConfiguration -ConnectionName '{VPN_NAME_WIN}' -AuthenticationTransformConstants GCMAES256 -CipherTransformConstants GCMAES256 -EncryptionMethod AES256 -IntegrityCheckMethod SHA256 -DHGroup Group18 -PfsGroup PFS2048 -Force
-        }}
-        """
-        subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+        if not IS_WINDOWS:
+            return True, "OK"
+
+        # 1. Verificar se o perfil já existe no catálogo (AllUser ou User)
+        pbk_path = get_windows_phonebook_path()
+        if pbk_path:
+            try:
+                target_header = f"[{VPN_NAME_WIN}]".lower()
+                with open(pbk_path, "r", encoding="utf-8", errors="ignore") as f:
+                    if target_header in f.read().lower():
+                        return True, "Perfil já configurado"
+            except Exception:
+                pass
+
+        # 2. Verificar via PowerShell nativo (CurrentUser e AllUserConnection)
+        ps_check = (
+            f"$v = (Get-VpnConnection -Name '{VPN_NAME_WIN}' -AllUserConnection -ErrorAction SilentlyContinue); "
+            f"if (-not $v) {{ $v = (Get-VpnConnection -Name '{VPN_NAME_WIN}' -ErrorAction SilentlyContinue) }}; "
+            f"if ($v) {{ exit 0 }} else {{ exit 1 }}"
+        )
+        check_proc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_check],
             capture_output=True,
-            text=True,
-            errors="replace",
             creationflags=WIN_CREATE_NO_WINDOW
         )
+        if check_proc.returncode == 0:
+            return True, "Perfil já configurado"
+
+        self.log(f"Perfil '{VPN_NAME_WIN}' não encontrado. Configurando no Windows...")
+
+        ps_config_commands = (
+            f"Add-VpnConnection -Name '{VPN_NAME_WIN}' -ServerAddress '{gw}' -TunnelType 'IKEv2' "
+            f"-AuthenticationMethod 'EAP' -EncryptionLevel 'Required' -SplitTunneling $true -AllUserConnection -Force; "
+            f"Set-VpnConnectionIPsecConfiguration -ConnectionName '{VPN_NAME_WIN}' -AuthenticationTransformConstants GCMAES256 "
+            f"-CipherTransformConstants GCMAES256 -EncryptionMethod AES256 -IntegrityCheckMethod SHA256 -DHGroup Group18 "
+            f"-PfsGroup PFS2048 -AllUserConnection -Force"
+        )
+
+        if is_windows_admin():
+            proc = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_config_commands],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                creationflags=WIN_CREATE_NO_WINDOW
+            )
+            if proc.returncode == 0:
+                self.log(f"✓ Perfil '{VPN_NAME_WIN}' criado com sucesso no catálogo global do Windows.")
+                return True, "Criado com sucesso"
+            else:
+                err_text = proc.stderr.strip() or proc.stdout.strip()
+                return False, f"Falha ao criar perfil VPN: {err_text[:120]}"
+        else:
+            self.log("[*] Solicitando permissão de Administrador para registrar conexão no catálogo do Windows...")
+            elevate_script = (
+                f"$proc = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList "
+                f"'-NoProfile -ExecutionPolicy Bypass -Command \"{ps_config_commands}\"'; "
+                f"exit $proc.ExitCode"
+            )
+            subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", elevate_script],
+                capture_output=True,
+                text=True,
+                errors="replace"
+            )
+            recheck = get_windows_phonebook_path()
+            if recheck:
+                try:
+                    with open(recheck, "r", encoding="utf-8", errors="ignore") as f:
+                        if f"[{VPN_NAME_WIN}]".lower() in f.read().lower():
+                            self.log(f"✓ Perfil '{VPN_NAME_WIN}' registrado no catálogo com privilégios administrativos.")
+                            return True, "Criado com sucesso"
+                except Exception:
+                    pass
+
+            return False, "Permissão de Administrador necessária para criar a conexão VPN no Windows."
 
     def on_connect(self):
         gw = self.entry_gateway.get().strip()
@@ -720,8 +871,17 @@ secrets {{
         def run():
             if IS_WINDOWS:
                 try:
-                    self.ensure_windows_vpn_configured(gw)
+                    success, msg = self.ensure_windows_vpn_configured(gw)
+                    if not success:
+                        self.root.after(0, lambda: self.log(f"✗ {msg}"))
+                        self.root.after(0, self.update_status)
+                        return
+
+                    pbk_path = get_windows_phonebook_path()
                     cmd = ["rasdial", VPN_NAME_WIN, user, pwd]
+                    if pbk_path:
+                        cmd.append(f"/phonebook:{pbk_path}")
+
                     proc = subprocess.run(
                         cmd,
                         capture_output=True,
@@ -733,7 +893,8 @@ secrets {{
                         self.root.after(0, lambda: self.log("✓ SUCESSO: VPN CONECTADA no Windows!"))
                     else:
                         out = proc.stdout.strip() or proc.stderr.strip()
-                        self.root.after(0, lambda: self.log(f"✗ Falha Windows: {out[:120]}"))
+                        err_msg = parse_windows_rasdial_error(out)
+                        self.root.after(0, lambda: self.log(f"✗ {err_msg}"))
                 except Exception as e:
                     self.root.after(0, lambda: self.log(f"✗ Erro de execução no Windows: {e}"))
             else:
@@ -772,8 +933,12 @@ secrets {{
 
         def run():
             if IS_WINDOWS:
+                cmd = ["rasdial", VPN_NAME_WIN, "/disconnect"]
+                pbk_path = get_windows_phonebook_path()
+                if pbk_path:
+                    cmd.append(f"/phonebook:{pbk_path}")
                 subprocess.run(
-                    ["rasdial", VPN_NAME_WIN, "/disconnect"],
+                    cmd,
                     capture_output=True,
                     text=True,
                     errors="replace",
@@ -786,6 +951,7 @@ secrets {{
             self.root.after(0, self.update_status)
 
         threading.Thread(target=run, daemon=True).start()
+
 
     def on_test_web(self):
         self.log("Testando acesso ao Painel Web FortiOS (https://10.64.10.1:6464)...")

@@ -27,13 +27,18 @@ if (-not $isAdmin) {
     }
 }
 
-# 2. Criar ou atualizar a Conexão VPN nativa do Windows
+# 2. Criar ou atualizar a Conexão VPN nativa do Windows no catálogo global (All Users)
 Write-Host "`n[*] Configurando Conexão VPN: $VpnName (Servidor: $ServerAddress)..." -ForegroundColor Yellow
 
-$existingVpn = Get-VpnConnection -Name $VpnName -ErrorAction SilentlyContinue
-if ($existingVpn) {
-    Write-Host "[*] Conexão existente encontrada. Atualizando..." -ForegroundColor Yellow
-    Remove-VpnConnection -Name $VpnName -Force -Confirm:$false
+$existingVpnAll = Get-VpnConnection -Name $VpnName -AllUserConnection -ErrorAction SilentlyContinue
+$existingVpnUser = Get-VpnConnection -Name $VpnName -ErrorAction SilentlyContinue
+
+if ($existingVpnAll) {
+    Write-Host "[*] Conexão global existente encontrada. Atualizando catálogo..." -ForegroundColor Yellow
+    Remove-VpnConnection -Name $VpnName -AllUserConnection -Force -Confirm:$false -ErrorAction SilentlyContinue
+}
+if ($existingVpnUser) {
+    Remove-VpnConnection -Name $VpnName -Force -Confirm:$false -ErrorAction SilentlyContinue
 }
 
 Add-VpnConnection -Name $VpnName `
@@ -42,6 +47,7 @@ Add-VpnConnection -Name $VpnName `
     -AuthenticationMethod "EAP" `
     -EncryptionLevel "Required" `
     -SplitTunneling $true `
+    -AllUserConnection `
     -Force
 
 # 3. Configurar parâmetros de criptografia IPsec requeridos pelo FortiGate (MODP_8192 / Group 18)
@@ -53,6 +59,7 @@ Set-VpnConnectionIPsecConfiguration -ConnectionName $VpnName `
     -IntegrityCheckMethod SHA256 `
     -DHGroup Group18 `
     -PfsGroup PFS2048 `
+    -AllUserConnection `
     -Force
 
 # 4. Criar atalho na Área de Trabalho com o ícone oficial DTIC

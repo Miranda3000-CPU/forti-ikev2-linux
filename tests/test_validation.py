@@ -124,6 +124,32 @@ class TestCrossPlatformValidation(unittest.TestCase):
         self.assertIn("FortiClient-VPN", decoded)
         print("  [OK] Decodificação resiliente de saída Windows validada.")
 
+    def test_windows_error_623_parsing_and_phonebook(self):
+        """Valida que o Erro 623 (catálogo telefônico) e outros erros do rasdial são tratados com clareza."""
+        vpn_module = importlib.import_module("vpn-gui")
+
+        # Simular Erro 623 real do Windows em português
+        sample_err_623 = (
+            "Conectando a FortiClient-VPN...\n"
+            "Erro 623: O sistema não pôde encontrar a entrada de catálogo telefônico para esta conexão.\n"
+            "Para obter mais assistência, clique em Mais Informações."
+        )
+        parsed_623 = vpn_module.parse_windows_rasdial_error(sample_err_623)
+        self.assertIn("Erro 623", parsed_623)
+        self.assertIn("catálogo telefônico", parsed_623)
+
+        # Simular Erro 691 (senha/usuário)
+        sample_err_691 = "Conectando a FortiClient-VPN...\nErro 691: Falha na autenticação do usuário."
+        parsed_691 = vpn_module.parse_windows_rasdial_error(sample_err_691)
+        self.assertIn("Erro 691", parsed_691)
+
+        # Simular Erro 809 (timeout gateway)
+        sample_err_809 = "Erro 809: O tempo limite da conexão expirou."
+        parsed_809 = vpn_module.parse_windows_rasdial_error(sample_err_809)
+        self.assertIn("Erro 809", parsed_809)
+
+        print("  [OK] Parsing de mensagens de erro do Windows (incluindo Erro 623/catálogo) validado com sucesso.")
+
     def test_windows_launcher_and_shortcut_generator(self):
         """Valida que os scripts Windows possuem elevação UAC, resolução de dependências e caminhos corretos."""
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

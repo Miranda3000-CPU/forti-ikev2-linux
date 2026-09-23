@@ -102,12 +102,12 @@ if %errorlevel% neq 0 (
 )
 echo   [OK] Dependencias satisfeitas.
 
-:: 5. Garantir perfil nativo VPN IKEv2 configurado no Windows
+:: 5. Garantir perfil nativo VPN IKEv2 configurado no Windows (Catálogo AllUserConnection)
 echo.
 echo [3/4] Verificando perfil de conexao VPN no Windows...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$v = Get-VpnConnection -Name 'FortiClient-VPN' -ErrorAction SilentlyContinue; if (-not $v) { Add-VpnConnection -Name 'FortiClient-VPN' -ServerAddress '198.51.100.100' -TunnelType 'IKEv2' -AuthenticationMethod 'EAP' -EncryptionLevel 'Required' -SplitTunneling $true -Force; Set-VpnConnectionIPsecConfiguration -ConnectionName 'FortiClient-VPN' -AuthenticationTransformConstants GCMAES256 -CipherTransformConstants GCMAES256 -EncryptionMethod AES256 -IntegrityCheckMethod SHA256 -DHGroup Group18 -PfsGroup PFS2048 -Force }" >nul 2>&1
-echo   [OK] Perfil IKEv2 / IPsec Group18 verificado.
+    "$v = (Get-VpnConnection -Name 'FortiClient-VPN' -AllUserConnection -ErrorAction SilentlyContinue); if (-not $v) { $v = (Get-VpnConnection -Name 'FortiClient-VPN' -ErrorAction SilentlyContinue) }; if (-not $v) { Add-VpnConnection -Name 'FortiClient-VPN' -ServerAddress '198.51.100.100' -TunnelType 'IKEv2' -AuthenticationMethod 'EAP' -EncryptionLevel 'Required' -SplitTunneling $true -AllUserConnection -Force; Set-VpnConnectionIPsecConfiguration -ConnectionName 'FortiClient-VPN' -AuthenticationTransformConstants GCMAES256 -CipherTransformConstants GCMAES256 -EncryptionMethod AES256 -IntegrityCheckMethod SHA256 -DHGroup Group18 -PfsGroup PFS2048 -AllUserConnection -Force }" >nul 2>&1
+echo   [OK] Perfil IKEv2 / IPsec Group18 verificado no catalogo do Windows.
 
 :: 6. Iniciar Aplicacao Grafica
 echo.
