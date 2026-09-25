@@ -1,206 +1,150 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Suite de Testes e Validação Multiplataforma (Windows e Linux)
-Valida que:
-1. NENHUM comando Linux/POSIX (cat, sudo, swanctl, ip, tee, chmod) é executado no Windows.
-2. A detecção de IP local é 100% nativa em Python (sockets) e funciona sem utilitários externos.
-3. Tratamento de caminhos de arquivos e %APPDATA% no Windows.
-4. Recorte do ícone redondo com antialiasing e geração do .ico.
-5. Salvamento e carregamento seguro de credenciais em JSON com modo restrito.
-6. Decodificação de processos no Windows (encoding com replace, sem quebra com caracteres acentuados).
-"""
-
-import sys
 import os
-import re
-import ast
-import json
+import sys
 import unittest
-from PIL import Image
-
-# Importar módulos do projeto
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import importlib
 
-class TestCrossPlatformValidation(unittest.TestCase):
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
 
-    def test_no_posix_commands_on_windows(self):
-        """
-        Inspeção Estática de Código (AST):
-        Garante que chamadas a comandos Linux (cat, sudo, swanctl, ip rule, tee, chmod)
-        NUNCA ocorram em caminhos de código do Windows.
-        """
-        code_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vpn-gui.py")
-        with open(code_path, "r", encoding="utf-8") as f:
-            source = f.read()
 
-        # Proibir categoricamente qualquer chamada de subprocess com "cat"
-        self.assertNotIn('subprocess.run(["cat"', source)
-        self.assertNotIn('subprocess.check_output(["cat"', source)
-        self.assertNotIn('"cat"', source.replace("certificate", "").replace("indicate", "").replace("categories", "").replace("category", "").replace("truncate", ""))
+def read(path):
+    with open(os.path.join(BASE_DIR, path), "r", encoding="utf-8") as handle:
+        return handle.read()
 
-        # Verificar se chamadas de sudo/swanctl estão estritamente dentro do bloco else (não Windows)
-        tree = ast.parse(source)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Attribute) and node.func.attr in ("run", "check_output"):
-                    # Verificar o primeiro argumento do comando
-                    if node.args and isinstance(node.args[0], ast.List):
-                        first_element = node.args[0].elts[0] if node.args[0].elts else None
-                        if isinstance(first_element, ast.Constant):
-                            cmd_name = str(first_element.value)
-                            if cmd_name in ("sudo", "swanctl", "ip", "chmod", "tee"):
-                                # Se chama sudo/swanctl/ip, a linha de código não pode estar no bloco if IS_WINDOWS
-                                line_no = node.lineno
-                                # Certifica-se que a linha está dentro de método ou bloco exclusivo do Linux
-                                pass
 
-    def test_local_ip_detection_native(self):
-        """Testa se a detecção de IP local funciona sem comandos externos."""
-        from importlib import import_module
-        vpn_module = importlib.import_module("vpn-gui")
-        ip = vpn_module.detect_local_ip("198.51.100.100")
-        self.assertIsInstance(ip, str)
-        # Deve ter formato de IPv4 válido
-        parts = ip.split(".")
-        self.assertEqual(len(parts), 4)
-        for p in parts:
-            self.assertTrue(0 <= int(p) <= 255)
-        print(f"  [OK] IP Local detectado nativamente: {ip}")
+class TestFortiClientVPN(unittest.TestCase):
+    def test_vpn_gui_imports(self):
+        importlib.import_module("vpn-gui")
 
-    def test_circular_icon_crop(self):
-        """Testa se a função make_round_image gera bordas transparentes perfeitas (alpha=0)."""
-        vpn_module = importlib.import_module("vpn-gui")
-        test_img = Image.new("RGB", (200, 200), color=(20, 50, 100))
-        round_img = vpn_module.make_round_image(test_img, (64, 64))
+    def test_engine_and_config_import(self):
+        importlib.import_module("vpn_engine")
+        importlib.import_module("vpn_config")
 
-        self.assertEqual(round_img.size, (64, 64))
-        self.assertEqual(round_img.mode, "RGBA")
-        # Canto superior esquerdo deve ser 100% transparente (alpha = 0)
-        self.assertEqual(round_img.getpixel((0, 0))[3], 0)
-        # Centro da imagem deve ser 100% opaco (alpha = 255)
-        self.assertEqual(round_img.getpixel((32, 32))[3], 255)
-        print("  [OK] Recorte circular com antialiasing validado com sucesso.")
+    # ------------------------------------------------------------- arquivos
+    def test_config_example_exists(self):
+        self.assertTrue(os.path.exists(os.path.join(BASE_DIR, "config", "forti.conf.example")))
 
-    def test_windows_resource_path_and_config(self):
-        """Testa a resolução de caminhos de arquivos simulando Windows."""
-        vpn_module = importlib.import_module("vpn-gui")
+    def test_config_example_has_psk(self):
+        self.assertIn("secrets", read("config/forti.conf.example"))
 
-        # Simular Windows
-        old_win = vpn_module.IS_WINDOWS
-        try:
-            vpn_module.IS_WINDOWS = True
-            os.environ["APPDATA"] = "/tmp/fake_appdata"
-            cfg_dir = vpn_module.VpnApp.get_config_dir(None)
-            self.assertTrue(cfg_dir.endswith("FortiClientVPN"))
-            self.assertTrue(os.path.exists(cfg_dir))
-        finally:
-            vpn_module.IS_WINDOWS = old_win
+    def test_icon_files_exist(self):
+        self.assertTrue(os.path.exists(os.path.join(BASE_DIR, "assets", "icon.png")))
+        self.assertTrue(os.path.exists(os.path.join(BASE_DIR, "assets", "icon.ico")))
 
-        print("  [OK] Resolução de diretórios para Windows (%APPDATA%) validada.")
+    def test_desktop_file_exists(self):
+        self.assertTrue(os.path.exists(os.path.join(BASE_DIR, "assets", "forticlient-vpn.desktop")))
 
-    def test_windows_powershell_script_syntax(self):
-        """Verifica se o script PowerShell gerado para Windows não possui erros de sintaxe ou aliases Unix."""
-        code_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vpn-gui.py")
-        with open(code_path, "r", encoding="utf-8") as f:
-            source = f.read()
+    def test_debian_control_exists(self):
+        self.assertTrue(os.path.exists(os.path.join(BASE_DIR, "debian", "control")))
 
-        # O script powershell deve conter os comandos nativos corretos
-        self.assertIn("Add-VpnConnection", source)
-        self.assertIn("Set-VpnConnectionIPsecConfiguration", source)
-        self.assertIn("Group18", source)
-        self.assertIn("GCMAES256", source)
-        # Não pode conter comandos bash no script do Windows
-        self.assertNotIn("cat /", source)
-        self.assertNotIn("grep ", source)
-        print("  [OK] Sintaxe e comandos PowerShell Windows validados.")
+    def test_debian_control_dependencies(self):
+        self.assertIn("strongswan", read("debian/control"))
 
-    def test_windows_rasdial_encoding_safety(self):
-        """Garante que a decodificação de subprocess no Windows trata caracteres acentuados sem exceção."""
-        # Simula saída em português do Windows (com 'êxito', 'conexão', etc.)
-        fake_output = "Conectado a FortiClient-VPN\nComando concluído com êxito.".encode("cp1252")
-        decoded = fake_output.decode("utf-8", errors="replace")
-        self.assertIn("FortiClient-VPN", decoded)
-        print("  [OK] Decodificação resiliente de saída Windows validada.")
+    def test_readme_has_both_platforms(self):
+        content = read("README.md")
+        self.assertIn("Windows", content)
+        self.assertIn("Linux", content)
 
-    def test_windows_error_623_parsing_and_phonebook(self):
-        """Valida que o Erro 623 (catálogo telefônico) e outros erros do rasdial são tratados com clareza."""
-        vpn_module = importlib.import_module("vpn-gui")
+    def test_gitignore_has_dist(self):
+        content = read(".gitignore")
+        self.assertIn("dist/", content)
+        self.assertIn("build/output", content)
+        self.assertIn("vendor/windows/*.exe", content)
 
-        # Simular Erro 623 real do Windows em português
-        sample_err_623 = (
-            "Conectando a FortiClient-VPN...\n"
-            "Erro 623: O sistema não pôde encontrar a entrada de catálogo telefônico para esta conexão.\n"
-            "Para obter mais assistência, clique em Mais Informações."
-        )
-        parsed_623 = vpn_module.parse_windows_rasdial_error(sample_err_623)
-        self.assertIn("Erro 623", parsed_623)
-        self.assertIn("catálogo telefônico", parsed_623)
+    # --------------------------------------------------------- build scripts
+    def test_build_deb_script_exists(self):
+        path = os.path.join(BASE_DIR, "build", "build_deb.sh")
+        self.assertTrue(os.path.exists(path))
+        self.assertTrue(os.access(path, os.X_OK))
 
-        # Simular Erro 691 (senha/usuário)
-        sample_err_691 = "Conectando a FortiClient-VPN...\nErro 691: Falha na autenticação do usuário."
-        parsed_691 = vpn_module.parse_windows_rasdial_error(sample_err_691)
-        self.assertIn("Erro 691", parsed_691)
+    def test_build_windows_script_exists(self):
+        self.assertTrue(os.path.exists(os.path.join(BASE_DIR, "build", "build_windows.bat")))
 
-        # Simular Erro 809 (timeout gateway)
-        sample_err_809 = "Erro 809: O tempo limite da conexão expirou."
-        parsed_809 = vpn_module.parse_windows_rasdial_error(sample_err_809)
-        self.assertIn("Erro 809", parsed_809)
+    def test_pyinstaller_spec_exists(self):
+        self.assertTrue(os.path.exists(os.path.join(BASE_DIR, "build", "FortiClient-VPN.spec")))
 
-        print("  [OK] Parsing de mensagens de erro do Windows (incluindo Erro 623/catálogo) validado com sucesso.")
+    def test_pyinstaller_spec_has_no_forced_uac(self):
+        """Elevar a GUI inteira foi a causa de conflitos no Windows."""
+        self.assertNotIn("uac_admin=True", read("build/FortiClient-VPN.spec").replace(" ", ""))
 
-    def test_windows_launcher_and_shortcut_generator(self):
-        """Valida que os scripts Windows possuem elevação UAC, resolução de dependências e caminhos corretos."""
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        launcher_cmd = os.path.join(base_dir, "iniciar_vpn.cmd")
-        shortcut_bat = os.path.join(base_dir, "criar_atalho_windows.bat")
+    def test_windows_build_does_not_delete_itself(self):
+        """O .bat rodava 'rmdir /s /q build' e apagava o proprio .spec."""
+        content = read("build/build_windows.bat").lower()
+        self.assertNotIn("rmdir /s /q build\n", content)
+        self.assertNotIn("if exist build rmdir", content)
 
-        self.assertTrue(os.path.exists(launcher_cmd), "iniciar_vpn.cmd deve existir")
-        self.assertTrue(os.path.exists(shortcut_bat), "criar_atalho_windows.bat deve existir")
+    def test_strongswan_cross_build_script_exists(self):
+        path = os.path.join(BASE_DIR, "build", "build_strongswan_windows.sh")
+        self.assertTrue(os.path.exists(path))
 
-        with open(launcher_cmd, "r", encoding="utf-8", errors="replace") as f:
-            content_launcher = f.read()
+    def test_one_command_installer_script_exists(self):
+        """O usuário não deve precisar preparar nada à mão."""
+        path = os.path.join(BASE_DIR, "build", "preparar_instalador_windows.sh")
+        self.assertTrue(os.path.exists(path))
+        self.assertTrue(os.access(path, os.X_OK))
+        content = read("build/preparar_instalador_windows.sh")
+        self.assertIn("ISCC", content)
+        self.assertIn("wine", content)
 
-        # Validação UAC e elevação
-        self.assertIn("net session", content_launcher)
-        self.assertIn("-Verb RunAs", content_launcher)
-        # Validação de resolução de dependências
-        self.assertIn("requirements.txt", content_launcher)
-        self.assertIn("Pillow", content_launcher)
-        # Validação de perfil VPN
-        self.assertIn("FortiClient-VPN", content_launcher)
-        self.assertIn("Group18", content_launcher)
-        # Execução final do script
-        self.assertIn("vpn-gui.py", content_launcher)
+    def test_ci_builds_the_installer(self):
+        """Sem build local: o CI gera o instalador e publica como artefato."""
+        path = os.path.join(BASE_DIR, ".github", "workflows", "windows-installer.yml")
+        self.assertTrue(os.path.exists(path))
+        content = read(".github/workflows/windows-installer.yml")
+        self.assertIn("msys2", content.lower())
+        self.assertIn("ISCC", content)
+        self.assertIn("upload-artifact", content)
+        self.assertIn("windows-latest", content)
 
-        with open(shortcut_bat, "r", encoding="utf-8", errors="replace") as f:
-            content_shortcut = f.read()
+    # -------------------------------------------------------------- motor
+    def test_no_native_windows_vpn_code(self):
+        """IKEv2 nativo do Windows nao suporta PSK: nao pode voltar."""
+        content = read("vpn-gui.py") + read("vpn_engine.py")
+        self.assertNotIn("Add-VpnConnection -Name", content)
+        self.assertNotIn("rasdial", content)
 
-        self.assertIn("iniciar_vpn.cmd", content_shortcut)
-        self.assertIn("icon.ico", content_shortcut)
-        self.assertIn("CreateShortcut", content_shortcut)
-        print("  [OK] Lançador Windows e criador de atalho UAC validados com sucesso.")
+    def test_no_forticlient_backend(self):
+        """O app nao pode depender do FortiClient nem de CLIs inexistentes."""
+        content = read("vpn-gui.py") + read("vpn_engine.py")
+        self.assertNotIn("fortivpn.exe", content)
+        self.assertNotIn("fortissl", content)
+        self.assertNotIn("FortiSSLVPNclient", content)
+        # A unica mencao aceitavel e a limpeza dos residuos antigos.
+        self.assertNotIn("configure_forticlient_tunnel", content)
+        self.assertNotIn("find_forticlient", content)
 
-    def test_linux_launcher_integrity_and_security(self):
-        """Valida que o iniciar_linux.sh possui verificações estritas, regras seguras e suporte a flags."""
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        launcher_sh = os.path.join(base_dir, "iniciar_linux.sh")
-
-        self.assertTrue(os.path.exists(launcher_sh), "iniciar_linux.sh deve existir")
-        self.assertTrue(os.access(launcher_sh, os.X_OK), "iniciar_linux.sh deve ser executável")
-
-        with open(launcher_sh, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        self.assertIn("set -euo pipefail", content)
+    def test_engine_uses_swanctl(self):
+        content = read("vpn_engine.py")
         self.assertIn("swanctl", content)
-        self.assertIn("/etc/sudoers.d/forticlient-vpn", content)
-        self.assertIn("visudo", content)
-        self.assertIn("FortiClient-VPN.desktop", content)
-        self.assertIn("--check", content)
-        self.assertIn("--setup-only", content)
-        print("  [OK] Lançador Linux, integridade de segurança e sudoers validados.")
+        self.assertIn("charon-svc.exe", content)
+        self.assertIn("IKEEXT", content)
+
+    def test_psk_field_in_gui(self):
+        self.assertIn("entry_psk", read("vpn-gui.py"))
+
+    def test_dpapi_functions_exist(self):
+        content = read("vpn_config.py")
+        self.assertIn("dpapi_encrypt", content)
+        self.assertIn("dpapi_decrypt", content)
+
+    def test_cleanup_of_previous_artifacts(self):
+        content = read("vpn_engine.py")
+        self.assertIn("cleanup_conflicts", content)
+        self.assertIn("FortiClient-VPN", content)
+
+    def test_packaging_ships_all_modules(self):
+        """Empacotar so o vpn-gui.py quebra o app (importa os outros modulos)."""
+        for path in ("build/build_deb.sh", "install.sh"):
+            content = read(path)
+            for module in ("vpn-gui.py", "vpn_engine.py", "vpn_config.py"):
+                self.assertIn(module, content, "%s nao inclui %s" % (path, module))
+
+    # ------------------------------------------------------------ sudoers
+    def test_sudoers_allows_status_query(self):
+        """Sem --list-sas no sudoers o status nunca funciona no Linux."""
+        for path in ("install.sh", "debian/postinst"):
+            self.assertIn("swanctl --list-sas", read(path), path)
+
 
 if __name__ == "__main__":
     unittest.main()

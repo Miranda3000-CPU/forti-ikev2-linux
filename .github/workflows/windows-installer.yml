@@ -1,0 +1,86 @@
+name: Instalador Windows
+
+# Gera o FortiClient-VPN-Setup.exe sem precisar de nada instalado na sua máquina.
+# Rode em Actions -> "Instalador Windows" -> Run workflow e baixe o artefato.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "vpn-gui.py"
+      - "vpn_engine.py"
+      - "vpn_config.py"
+      - "build/**"
+      - "vendor/**"
+      - "assets/**"
+      - "tests/**"
+      - ".github/workflows/windows-installer.yml"
+  workflow_dispatch:
+
+jobs:
+  testes:
+    name: Testes (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependências
+        run: sudo apt-get update && sudo apt-get install -y python3-tk
+      - name: Rodar a suíte
+        run: python3 -m unittest discover -s tests -v
+
+  instalador:
+    name: Instalador (.exe)
+    runs-on: windows-latest
+    needs: testes
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain do motor strongSwan (MSYS2)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            tar
+            bzip2
+            curl
+            perl
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-openssl
+            mingw-w64-x86_64-pkgconf
+
+      - name: Compilar o motor strongSwan para Windows
+        shell: msys2 {0}
+        run: bash build/build_strongswan_windows_msys2.sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dependências do empacotamento
+        run: pip install pyinstaller pillow
+
+      - name: Versão e commit no pacote
+        run: python build/gen_build_info.py
+
+      - name: Gerar o executável
+        run: pyinstaller --noconfirm --distpath build/output --workpath build/output/work build/FortiClient-VPN.spec
+
+      - name: Instalar o Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Gerar o instalador
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe não encontrado em $iscc" }
+          & $iscc "build\FortiClient-VPN-Setup.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC falhou com código $LASTEXITCODE" }
+
+      - name: Publicar o instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: FortiClient-VPN-Setup
+          path: dist/FortiClient-VPN-Setup.exe
+          if-no-files-found: error

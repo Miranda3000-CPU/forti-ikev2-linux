@@ -3,52 +3,31 @@
 """
 FortiClient VPN Manager - Interface Gráfica Multiplataforma (Linux & Windows)
 Compatível com VPNs FortiGate IKEv2 (EAP-MSCHAPv2 + PSK).
+
+O motor é o strongSwan nos dois sistemas operacionais (ver `vpn_engine`).
+No Windows os binários são vendorizados em `vendor/windows/`.
 """
 
-import sys
+import argparse
 import os
-import json
-import time
-import re
 import socket
+import sys
 import threading
-import subprocess
+import time
 import webbrowser
 import ssl
 import urllib.request
+import urllib.error
 import tkinter as tk
 from tkinter import ttk, messagebox
+
+import vpn_config as cfgstore
+from vpn_engine import VpnEngine, Status
 
 IS_WINDOWS = sys.platform == "win32"
 IS_LINUX = sys.platform.startswith("linux")
 
-# Flags de processo para Windows (execução silenciosa sem janela preta de cmd)
-WIN_CREATE_NO_WINDOW = 0x08000000 if IS_WINDOWS else 0
-
-CONF_FILE_LINUX = "/etc/swanctl/conf.d/forti.conf"
-CHILD_NAME = "forticlient"
-VPN_NAME_WIN = "FortiClient-VPN"
 WEB_URL = "https://10.64.10.1:6464/login?redir=%2F"
-
-
-def get_resource_path(relative_path):
-    """Obtém caminho absoluto para recursos, funcionando em ambiente de dev e executável PyInstaller."""
-    if hasattr(sys, "_MEIPASS"):
-        base_path = sys._MEIPASS
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-
-    full_path = os.path.join(base_path, relative_path)
-    if os.path.exists(full_path):
-        return full_path
-
-    if IS_LINUX:
-        system_path = os.path.join("/usr/share/forticlient-vpn", relative_path)
-        if os.path.exists(system_path):
-            return system_path
-
-    return full_path
-
 
 try:
     from PIL import Image, ImageDraw
@@ -66,37 +45,52 @@ except ImportError:
     HAS_IMAGETK = False
 
 
-def detect_local_ip(target_gw="198.51.100.100"):
+def get_resource_path(relative_path):
+    """Caminho absoluto para recursos, funcionando em dev e no PyInstaller."""
+    if hasattr(sys, "_MEIPASS"):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+
+    full_path = os.path.join(base_path, relative_path)
+    if os.path.exists(full_path):
+        return full_path
+
+    if IS_LINUX:
+        system_path = os.path.join("/usr/share/forticlient-vpn", relative_path)
+        if os.path.exists(system_path):
+            return system_path
+
+    return full_path
+
+
+def detect_local_ip(target_gw=cfgstore.DEFAULT_GATEWAY):
     """
-    Detecta automaticamente o IP local roteado para o Gateway VPN.
-    Funciona de forma 100% nativa em Python tanto no Windows quanto no Linux,
-    sem recorrer a comandos de shell como ip, ifconfig ou cat.
+    Detecta o IP local roteado para o Gateway VPN, de forma nativa, sem
+    depender de comandos de shell (ip/ifconfig).
     """
-    # Método 1: Socket UDP voltado para o Gateway (não envia pacotes)
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(0.5)
-        s.connect((target_gw, 500))
-        ip = s.getsockname()[0]
-        s.close()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(0.5)
+        sock.connect((target_gw, 500))
+        ip = sock.getsockname()[0]
+        sock.close()
         if ip and not ip.startswith("127."):
             return ip
     except Exception:
         pass
 
-    # Método 2: Socket UDP em direção à rota padrão
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(0.5)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(0.5)
+        sock.connect(("8.8.8.8", 80))
+        ip = sock.getsockname()[0]
+        sock.close()
         if ip and not ip.startswith("127."):
             return ip
     except Exception:
         pass
 
-    # Método 3: Resolução de hostname
     try:
         ip = socket.gethostbyname(socket.gethostname())
         if ip and not ip.startswith("127."):
@@ -107,105 +101,15 @@ def detect_local_ip(target_gw="198.51.100.100"):
     return "127.0.0.1"
 
 
-def is_windows_admin():
-    """Verifica se o processo atual possui privilégios de administrador no Windows."""
-    if not IS_WINDOWS:
-        return False
-    try:
-        import ctypes
-        return ctypes.windll.shell32.IsUserAnAdmin() != 0
-    except Exception:
-        return False
-
-
-def get_windows_phonebook_path():
-    """
-    Localiza o arquivo rasphone.pbk que contém a conexão VPN_NAME_WIN.
-    Verifica primeiro no catálogo global (%ProgramData%) e no catálogo do usuário (%APPDATA%).
-    Retorna o caminho do arquivo .pbk se encontrado.
-    """
-    if not IS_WINDOWS:
-        return None
-
-    target_header = f"[{VPN_NAME_WIN}]".lower()
-    search_dirs = []
-
-    # 1. Catálogo do sistema (All Users / ProgramData)
-    prog_data = os.environ.get("ProgramData", os.environ.get("ALLUSERSPROFILE", r"C:\ProgramData"))
-    if prog_data:
-        search_dirs.append(os.path.join(prog_data, "Microsoft", "Network", "Connections", "Pbk", "rasphone.pbk"))
-
-    # 2. Catálogo do usuário atual (%APPDATA%)
-    app_data = os.environ.get("APPDATA")
-    if app_data:
-        search_dirs.append(os.path.join(app_data, "Microsoft", "Network", "Connections", "Pbk", "rasphone.pbk"))
-
-    # 3. Fallback System32/Ras
-    sys_root = os.environ.get("SystemRoot", r"C:\Windows")
-    search_dirs.append(os.path.join(sys_root, "System32", "Ras", "rasphone.pbk"))
-
-    # Procurar primeiro o arquivo que realmente contém a seção da VPN
-    for pbk_file in search_dirs:
-        if os.path.isfile(pbk_file):
-            try:
-                with open(pbk_file, "r", encoding="utf-8", errors="ignore") as f:
-                    if target_header in f.read().lower():
-                        return pbk_file
-            except Exception:
-                pass
-
-    # Se ainda não houver seção registrada, retornar o arquivo global existente
-    for pbk_file in search_dirs:
-        if os.path.isfile(pbk_file):
-            return pbk_file
-
-    return None
-
-
-def parse_windows_rasdial_error(output_text):
-    """Extrai mensagem de erro legível e amigável da saída do rasdial."""
-    clean_lines = [l.strip() for l in output_text.splitlines() if l.strip()]
-    meaningful = [
-        l for l in clean_lines
-        if not l.lower().startswith("conectando")
-        and not l.lower().startswith("connecting")
-        and not l.lower().startswith("verificando")
-        and not l.lower().startswith("verifying")
-        and not l.lower().startswith("para obter mais")
-        and not l.lower().startswith("for more help")
-    ]
-    detail = " | ".join(meaningful) if meaningful else output_text[:140]
-    lower = output_text.lower()
-
-    if "623" in lower or "catálogo" in lower or "phone book" in lower:
-        return (
-            f"Erro 623: Perfil '{VPN_NAME_WIN}' não encontrado no catálogo telefônico do Windows (rasphone.pbk). "
-            f"Execute iniciar_vpn.cmd como Administrador para registrar a conexão."
-        )
-    elif "691" in lower or "autenticação" in lower or "authentication" in lower:
-        return "Falha de Autenticação (Erro 691): Usuário ou senha incorretos."
-    elif "809" in lower or "tempo limite" in lower or "timed out" in lower:
-        return "Erro 809: Gateway VPN não respondeu nas portas UDP 500/4500 (verifique rede/firewall)."
-    elif "800" in lower:
-        return "Erro 800: Falha ao alcançar o servidor VPN. Verifique o Gateway e a Internet."
-    elif "789" in lower:
-        return "Erro 789: Incompatibilidade de cifras IPsec (Group18/GCMAES256 requerido)."
-    elif "720" in lower:
-        return "Erro 720: Falha nos protocolos de controle PPP no Windows."
-    else:
-        return f"Falha Windows: {detail[:150]}"
-
-
-
 def make_round_image(pil_img, size):
     """
     Recorta qualquer imagem em formato circular com antialiasing (supersampling),
     garantindo que o ícone do DTIC seja sempre perfeitamente redondo.
     """
-    w, h = pil_img.size
-    min_dim = min(w, h)
-    left = (w - min_dim) // 2
-    top = (h - min_dim) // 2
+    width, height = pil_img.size
+    min_dim = min(width, height)
+    left = (width - min_dim) // 2
+    top = (height - min_dim) // 2
     cropped = pil_img.crop((left, top, left + min_dim, top + min_dim))
 
     scale = 4
@@ -225,128 +129,129 @@ class VpnApp:
         self.root = root
         os_label = "Windows" if IS_WINDOWS else "Linux"
         self.root.title(f"FortiClient VPN - DTIC / PRODEPA ({os_label})")
-        self.root.geometry("640x750")
+        self.root.geometry("660x800")
         self.root.resizable(False, False)
         self.root.configure(bg="#f1f5f9")
 
-        # Rastreia se o usuário alterou o IP local manualmente
+        self.logger = cfgstore.setup_logging()
+        self.store = cfgstore.ConfigStore()
+        self.engine = VpnEngine(logger=self.logger)
         self.user_manually_edited_ip = False
+        self._busy = False
+        self._running = True
+        self._last_status = Status(False, None, "", "")
 
         self.setup_window_icon()
+        self._build_header(os_label)
+        self._build_status_bar()
+        self._build_config_card()
+        self._build_buttons()
+        self._build_action_bar()
+        self._build_log_box()
 
-        # Cabeçalho Superior com Logo Circular Oficial
-        header_frame = tk.Frame(root, bg="#0f172a", height=85)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        self.log(f"FortiClient VPN Manager iniciado no {os_label} (versao {cfgstore.app_version()}).")
+        available, detail = self.engine.availability()
+        if available:
+            self.log(f"Motor VPN: {detail}")
+        else:
+            self.log(f"AVISO: {detail}")
+        self.load_initial_config()
+        self.start_auto_refresh()
+        self._maybe_cleanup_on_first_run()
+
+    # ───────────────────────────────────────────────────────── construção da UI
+    def _build_header(self, os_label):
+        header_frame = tk.Frame(self.root, bg="#0f172a", height=85)
         header_frame.pack(fill="x")
 
         header_content = tk.Frame(header_frame, bg="#0f172a")
         header_content.pack(pady=12, padx=15)
 
-        if HAS_PIL and HAS_IMAGETK and hasattr(self, "header_img_tk") and self.header_img_tk:
-            self.logo_label = tk.Label(header_content, image=self.header_img_tk, bg="#0f172a")
-            self.logo_label.pack(side="left", padx=(0, 14))
+        if HAS_PIL and HAS_IMAGETK and getattr(self, "header_img_tk", None):
+            tk.Label(header_content, image=self.header_img_tk, bg="#0f172a").pack(side="left", padx=(0, 14))
         else:
-            lbl_badge = tk.Label(header_content, text="🛡️", font=("Helvetica", 24), bg="#0f172a", fg="#ffffff")
-            lbl_badge.pack(side="left", padx=(0, 10))
+            tk.Label(header_content, text="🛡️", font=("Helvetica", 24), bg="#0f172a", fg="#ffffff").pack(
+                side="left", padx=(0, 10)
+            )
 
         title_container = tk.Frame(header_content, bg="#0f172a")
         title_container.pack(side="left")
 
-        lbl_title = tk.Label(
+        tk.Label(
             title_container,
             text="FortiClient VPN Manager",
             font=("Helvetica", 16, "bold"),
             fg="#f8fafc",
-            bg="#0f172a"
-        )
-        lbl_title.pack(anchor="w")
+            bg="#0f172a",
+        ).pack(anchor="w")
 
-        lbl_sub = tk.Label(
+        tk.Label(
             title_container,
             text=f"Rede Corporativa DTIC • Conexão Segura IKEv2 / IPsec ({os_label})",
             font=("Helvetica", 9),
             fg="#94a3b8",
-            bg="#0f172a"
-        )
-        lbl_sub.pack(anchor="w")
+            bg="#0f172a",
+        ).pack(anchor="w")
 
-        # Barra de Status no Topo
-        status_bar = tk.Frame(root, bg="#ffffff", bd=1, relief="solid")
+    def _build_status_bar(self):
+        status_bar = tk.Frame(self.root, bg="#ffffff", bd=1, relief="solid")
         status_bar.pack(fill="x", padx=20, pady=(12, 8))
 
         self.lbl_status_icon = tk.Label(status_bar, text="●", font=("Helvetica", 22), fg="#ef4444", bg="#ffffff")
         self.lbl_status_icon.pack(side="left", padx=(15, 5), pady=6)
 
-        self.lbl_status_text = tk.Label(status_bar, text="DESCONECTADO", font=("Helvetica", 12, "bold"), fg="#ef4444", bg="#ffffff")
+        self.lbl_status_text = tk.Label(
+            status_bar, text="DESCONECTADO", font=("Helvetica", 12, "bold"), fg="#ef4444", bg="#ffffff"
+        )
         self.lbl_status_text.pack(side="left", pady=6)
 
         self.lbl_ip_info = tk.Label(status_bar, text="", font=("Helvetica", 9), fg="#64748b", bg="#ffffff")
         self.lbl_ip_info.pack(side="right", padx=15, pady=6)
 
-        # Card de Configurações de Rede e Credenciais
+    def _build_config_card(self):
         config_card = tk.LabelFrame(
-            root,
+            self.root,
             text=" Configurações de Conexão ",
             font=("Helvetica", 10, "bold"),
             bg="#ffffff",
             fg="#1e293b",
             padx=14,
-            pady=10
+            pady=10,
         )
         config_card.pack(fill="x", padx=20, pady=4)
 
-        # 1. Gateway VPN
-        tk.Label(config_card, text="Gateway VPN:", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(row=0, column=0, sticky="w", pady=4)
-        self.entry_gateway = tk.Entry(config_card, font=("Monospace", 9), width=20)
-        self.entry_gateway.grid(row=0, column=1, sticky="w", padx=6, pady=4)
-        self.entry_gateway.bind("<FocusOut>", lambda e: self.on_gateway_changed())
-
-        # 2. IP Local com botão de detecção automática
-        tk.Label(config_card, text="Meu IP Local:", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(row=0, column=2, sticky="w", pady=4)
-        ip_frame = tk.Frame(config_card, bg="#ffffff")
-        ip_frame.grid(row=0, column=3, sticky="w", padx=6, pady=4)
-
-        self.entry_local_ip = tk.Entry(ip_frame, font=("Monospace", 9), width=15)
-        self.entry_local_ip.pack(side="left")
-        self.entry_local_ip.bind("<Key>", lambda e: self.on_ip_manually_edited())
-
-        btn_refresh_ip = tk.Button(
-            ip_frame,
-            text="🔄",
-            font=("Helvetica", 8),
-            bg="#e2e8f0",
-            relief="flat",
-            cursor="hand2",
-            command=self.refresh_auto_ip,
-            title="Redetectar IP Local automaticamente" if hasattr(tk.Button, "title") else None
+        tk.Label(config_card, text="Gateway VPN:", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(
+            row=0, column=0, sticky="w", pady=4
         )
-        btn_refresh_ip.pack(side="left", padx=(3, 0))
+        self.entry_gateway = tk.Entry(config_card, font=("Monospace", 9), width=24)
+        self.entry_gateway.grid(row=0, column=1, sticky="w", padx=6, pady=4)
+        self.entry_gateway.bind("<FocusOut>", lambda event: self.on_gateway_changed())
 
-        # 3. Usuário EAP
-        tk.Label(config_card, text="Usuário (EAP):", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(row=1, column=0, sticky="w", pady=4)
-        self.entry_user = tk.Entry(config_card, font=("Monospace", 9), width=20)
-        self.entry_user.grid(row=1, column=1, sticky="w", padx=6, pady=4)
-
-        # 4. Senha
-        tk.Label(config_card, text="Senha:", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(row=1, column=2, sticky="w", pady=4)
-        self.entry_pass = tk.Entry(config_card, font=("Monospace", 9), show="•", width=18)
-        self.entry_pass.grid(row=1, column=3, sticky="w", padx=6, pady=4)
-
-        # 5. Chave PSK
-        tk.Label(config_card, text="Chave PSK:", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(row=2, column=0, sticky="w", pady=4)
+        tk.Label(
+            config_card, text="Chave PSK (Pre-Shared Key):", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155"
+        ).grid(row=1, column=0, sticky="w", pady=4)
         self.entry_psk = tk.Entry(config_card, font=("Monospace", 9), show="•", width=20)
-        self.entry_psk.grid(row=2, column=1, sticky="w", padx=6, pady=4)
+        self.entry_psk.grid(row=1, column=1, sticky="w", padx=6, pady=4)
 
-        # 6. Informação de IP Virtual
-        tk.Label(config_card, text="IP Virtual:", font=("Helvetica", 9), bg="#ffffff", fg="#64748b").grid(row=2, column=2, sticky="w", pady=4)
-        lbl_vip_info = tk.Label(config_card, text="Dinâmico (CPRP / FortiGate)", font=("Helvetica", 9, "italic"), bg="#ffffff", fg="#059669")
-        lbl_vip_info.grid(row=2, column=3, sticky="w", padx=6, pady=4)
+        tk.Label(config_card, text="Usuário (EAP):", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(
+            row=2, column=0, sticky="w", pady=4
+        )
+        self.entry_user = tk.Entry(config_card, font=("Monospace", 9), width=20)
+        self.entry_user.grid(row=2, column=1, sticky="w", padx=6, pady=4)
 
-        # Barra de Opções e Salvamento Local
+        tk.Label(config_card, text="Senha:", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(
+            row=2, column=2, sticky="w", pady=4
+        )
+        self.entry_pass = tk.Entry(config_card, font=("Monospace", 9), show="•", width=18)
+        self.entry_pass.grid(row=2, column=3, sticky="w", padx=6, pady=4)
+
         options_frame = tk.Frame(config_card, bg="#ffffff")
-        options_frame.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 2))
+        options_frame.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 4))
 
         self.var_show_pwd = tk.BooleanVar(value=False)
-        chk_show_pwd = tk.Checkbutton(
+        tk.Checkbutton(
             options_frame,
             text="Mostrar senhas",
             variable=self.var_show_pwd,
@@ -354,23 +259,21 @@ class VpnApp:
             bg="#ffffff",
             fg="#475569",
             activebackground="#ffffff",
-            font=("Helvetica", 8)
-        )
-        chk_show_pwd.pack(side="left")
+            font=("Helvetica", 8),
+        ).pack(side="left")
 
         self.var_save_creds = tk.BooleanVar(value=True)
-        chk_save = tk.Checkbutton(
+        tk.Checkbutton(
             options_frame,
-            text="Salvar dados neste computador",
+            text="Salvar credenciais neste computador",
             variable=self.var_save_creds,
             bg="#ffffff",
             fg="#475569",
             activebackground="#ffffff",
-            font=("Helvetica", 8)
-        )
-        chk_save.pack(side="left", padx=10)
+            font=("Helvetica", 8),
+        ).pack(side="left", padx=10)
 
-        btn_save = tk.Button(
+        tk.Button(
             options_frame,
             text="💾 Salvar Configurações",
             font=("Helvetica", 8, "bold"),
@@ -380,12 +283,75 @@ class VpnApp:
             padx=8,
             pady=3,
             cursor="hand2",
-            command=self.save_user_config
-        )
-        btn_save.pack(side="right")
+            command=self.save_user_config,
+        ).pack(side="right")
 
-        # Botões Principais de Conectar / Desconectar
-        btn_frame = tk.Frame(root, bg="#f1f5f9")
+        self.adv_expanded = False
+        self.btn_toggle_adv = tk.Button(
+            config_card,
+            text="▶ Opções Avançadas (IP Local, VIP)",
+            font=("Helvetica", 8, "bold"),
+            bg="#f1f5f9",
+            fg="#475569",
+            activebackground="#e2e8f0",
+            activeforeground="#1e293b",
+            relief="groove",
+            cursor="hand2",
+            padx=8,
+            pady=3,
+            command=self.toggle_advanced,
+        )
+        self.btn_toggle_adv.grid(row=4, column=0, columnspan=4, sticky="w", pady=(6, 2))
+
+        self.frame_advanced = tk.Frame(config_card, bg="#f8fafc", bd=1, relief="solid", padx=10, pady=8)
+
+        tk.Label(
+            self.frame_advanced, text="Meu IP Local:", font=("Helvetica", 9, "bold"), bg="#f8fafc", fg="#334155"
+        ).grid(row=0, column=0, sticky="w", pady=4)
+        ip_frame = tk.Frame(self.frame_advanced, bg="#f8fafc")
+        ip_frame.grid(row=0, column=1, sticky="w", padx=6, pady=4)
+
+        self.entry_local_ip = tk.Entry(ip_frame, font=("Monospace", 9), width=15)
+        self.entry_local_ip.pack(side="left")
+        self.entry_local_ip.bind("<Key>", lambda event: self.on_ip_manually_edited())
+
+        tk.Button(
+            ip_frame,
+            text="🔄",
+            font=("Helvetica", 8),
+            bg="#e2e8f0",
+            relief="flat",
+            cursor="hand2",
+            command=self.refresh_auto_ip,
+        ).pack(side="left", padx=(3, 0))
+
+        tk.Label(self.frame_advanced, text="IP Virtual:", font=("Helvetica", 9), bg="#f8fafc", fg="#64748b").grid(
+            row=1, column=0, sticky="w", pady=4
+        )
+        self.lbl_vip_val = tk.Label(
+            self.frame_advanced,
+            text="Dinâmico (CPRP / FortiGate)",
+            font=("Helvetica", 9, "italic"),
+            bg="#f8fafc",
+            fg="#059669",
+        )
+        self.lbl_vip_val.grid(row=1, column=1, sticky="w", padx=6, pady=4)
+
+        tk.Label(self.frame_advanced, text="Estratégia VIP:", font=("Helvetica", 9), bg="#f8fafc", fg="#64748b").grid(
+            row=2, column=0, sticky="w", pady=4
+        )
+        self.var_vip_strategy = tk.StringVar(value="auto")
+        ttk.Combobox(
+            self.frame_advanced,
+            textvariable=self.var_vip_strategy,
+            values=("auto", "none"),
+            state="readonly",
+            width=10,
+            font=("Monospace", 9),
+        ).grid(row=2, column=1, sticky="w", padx=6, pady=4)
+
+    def _build_buttons(self):
+        btn_frame = tk.Frame(self.root, bg="#f1f5f9")
         btn_frame.pack(fill="x", padx=20, pady=8)
 
         self.btn_connect = tk.Button(
@@ -399,7 +365,7 @@ class VpnApp:
             relief="flat",
             height=2,
             cursor="hand2",
-            command=self.on_connect
+            command=self.on_connect,
         )
         self.btn_connect.pack(side="left", padx=3, expand=True, fill="x")
 
@@ -414,17 +380,17 @@ class VpnApp:
             relief="flat",
             height=2,
             cursor="hand2",
-            command=self.on_disconnect
+            command=self.on_disconnect,
         )
         self.btn_disconnect.pack(side="right", padx=3, expand=True, fill="x")
 
-        # Barra de Ações Rápidas (Painel Web e Validação HTTP)
-        action_bar = tk.Frame(root, bg="#f1f5f9")
-        action_bar.pack(fill="x", padx=20, pady=4)
+    def _build_action_bar(self):
+        action_bar = tk.Frame(self.root, bg="#f1f5f9")
+        action_bar.pack(fill="x", padx=20, pady=2)
 
-        btn_open_web = tk.Button(
+        tk.Button(
             action_bar,
-            text="🌐 Abrir Painel Web (10.64.10.1:6464)",
+            text="🌐 Abrir Painel Web",
             font=("Helvetica", 9, "bold"),
             bg="#0284c7",
             fg="#ffffff",
@@ -433,72 +399,105 @@ class VpnApp:
             relief="flat",
             pady=6,
             cursor="hand2",
-            command=self.open_web_panel
-        )
-        btn_open_web.pack(side="left", padx=3, expand=True, fill="x")
+            command=self.open_web_panel,
+        ).pack(side="left", padx=2, expand=True, fill="x")
 
-        btn_test_web = tk.Button(
+        tk.Button(
             action_bar,
-            text="🔍 Validar Conexão Web (HTTP)",
+            text="🔍 Validar HTTP",
             font=("Helvetica", 9),
             bg="#e2e8f0",
             fg="#1e293b",
             relief="flat",
             pady=6,
             cursor="hand2",
-            command=self.on_test_web
-        )
-        btn_test_web.pack(side="right", padx=3, expand=True, fill="x")
+            command=self.on_test_web,
+        ).pack(side="left", padx=2, expand=True, fill="x")
 
-        # Caixa de Log e Diagnóstico em Tempo Real
-        log_frame = tk.Frame(root, bg="#f1f5f9")
-        log_frame.pack(fill="both", padx=20, pady=(8, 14), expand=True)
+        tools_bar = tk.Frame(self.root, bg="#f1f5f9")
+        tools_bar.pack(fill="x", padx=20, pady=(2, 4))
+
+        tk.Button(
+            tools_bar,
+            text="🧾 Exportar diagnóstico",
+            font=("Helvetica", 9),
+            bg="#e2e8f0",
+            fg="#1e293b",
+            relief="flat",
+            pady=5,
+            cursor="hand2",
+            command=self.on_export_diagnostics,
+        ).pack(side="left", padx=2, expand=True, fill="x")
+
+        tk.Button(
+            tools_bar,
+            text="🧹 Limpar conflitos",
+            font=("Helvetica", 9),
+            bg="#e2e8f0",
+            fg="#1e293b",
+            relief="flat",
+            pady=5,
+            cursor="hand2",
+            command=self.on_cleanup_conflicts,
+        ).pack(side="left", padx=2, expand=True, fill="x")
+
+    def _build_log_box(self):
+        log_frame = tk.Frame(self.root, bg="#f1f5f9")
+        log_frame.pack(fill="both", padx=20, pady=(4, 14), expand=True)
 
         log_header = tk.Frame(log_frame, bg="#f1f5f9")
         log_header.pack(fill="x", pady=(0, 4))
-        tk.Label(log_header, text="📋 Log de Atividades e Diagnóstico:", font=("Helvetica", 9, "bold"), bg="#f1f5f9", fg="#334155").pack(side="left")
+        tk.Label(
+            log_header,
+            text="📋 Log de Atividades e Diagnóstico:",
+            font=("Helvetica", 9, "bold"),
+            bg="#f1f5f9",
+            fg="#334155",
+        ).pack(side="left")
 
-        btn_clear = tk.Button(log_header, text="Limpar", font=("Helvetica", 8), bg="#e2e8f0", fg="#334155", relief="flat", command=self.clear_log)
-        btn_clear.pack(side="right")
+        tk.Button(
+            log_header,
+            text="Limpar",
+            font=("Helvetica", 8),
+            bg="#e2e8f0",
+            fg="#334155",
+            relief="flat",
+            command=self.clear_log,
+        ).pack(side="right")
 
-        self.log_text = tk.Text(log_frame, height=9, font=("Monospace", 8), bg="#0f172a", fg="#e2e8f0", bd=0, padx=8, pady=8)
+        self.log_text = tk.Text(
+            log_frame, height=10, font=("Monospace", 8), bg="#0f172a", fg="#e2e8f0", bd=0, padx=8, pady=8
+        )
         self.log_text.pack(fill="both", expand=True)
 
-        self.log(f"FortiClient VPN Manager iniciado no {os_label}.")
-        self.load_initial_config()
-        self.update_status()
-        self.start_auto_refresh()
-
     def setup_window_icon(self):
-        """Carrega e aplica a imagem oficial DTIC recortada redonda como ícone do app e janela."""
+        """Aplica a imagem oficial DTIC recortada redonda como ícone do app e janela."""
         possible_images = [
-            get_resource_path("assets/dtic-logo-whasapp.jpeg"),
             get_resource_path("assets/icon.png"),
+            get_resource_path("assets/dtic-logo-whasapp.jpeg"),
             "/usr/share/pixmaps/forticlient-vpn.png",
-            "/usr/share/forticlient-vpn/assets/dtic-logo-whasapp.jpeg"
+            "/usr/share/forticlient-vpn/assets/dtic-logo-whasapp.jpeg",
         ]
 
         img_path = None
-        for p in possible_images:
-            if os.path.exists(p):
-                img_path = p
+        for path in possible_images:
+            if os.path.exists(path):
+                img_path = path
                 break
 
         if img_path and HAS_PIL and HAS_IMAGETK:
             try:
                 base_img = Image.open(img_path)
-                round_ico_img = make_round_image(base_img, (64, 64))
-                self.icon_photo = ImageTk.PhotoImage(round_ico_img)
+                self.icon_photo = ImageTk.PhotoImage(make_round_image(base_img, (64, 64)))
                 self.root.iconphoto(True, self.icon_photo)
-
-                round_header_img = make_round_image(base_img, (50, 50))
-                self.header_img_tk = ImageTk.PhotoImage(round_header_img)
-            except Exception as e:
-                print(f"Aviso ao carregar ícone redondo: {e}")
+                self.header_img_tk = ImageTk.PhotoImage(make_round_image(base_img, (50, 50)))
+            except Exception as exc:
+                self._safe_print(f"Aviso ao carregar ícone redondo: {exc}")
         elif img_path:
             try:
                 self.icon_photo = tk.PhotoImage(file=img_path)
                 self.root.iconphoto(True, self.icon_photo)
+                self.header_img_tk = self.icon_photo
             except Exception:
                 pass
 
@@ -510,30 +509,35 @@ class VpnApp:
                 except Exception:
                     pass
 
-    def get_config_dir(self):
-        """Retorna o caminho seguro do diretório de configurações conforme o SO."""
-        if IS_WINDOWS:
-            base = os.environ.get("APPDATA", os.path.expanduser("~"))
-            path = os.path.join(base, "FortiClientVPN")
-        else:
-            path = os.path.expanduser("~/.config/forticlient-vpn")
-        os.makedirs(path, exist_ok=True)
-        return path
+    def _safe_print(self, message):
+        try:
+            print(message)
+        except Exception:
+            pass
 
-    def get_config_path(self):
-        return os.path.join(self.get_config_dir(), "config.json")
+    # ───────────────────────────────────────────────────────────── log
+    def log(self, message):
+        self.log_text.insert(tk.END, f"[{time.strftime('%H:%M:%S')}] {message}\n")
+        self.log_text.see(tk.END)
+        self.logger.info(message)
 
+    def clear_log(self):
+        self.log_text.delete("1.0", tk.END)
+
+    # ────────────────────────────────────────────── configurações
     def toggle_show_passwords(self):
         char = "" if self.var_show_pwd.get() else "•"
         self.entry_pass.config(show=char)
         self.entry_psk.config(show=char)
 
-    def log(self, message):
-        self.log_text.insert(tk.END, f"[{time.strftime('%H:%M:%S')}] {message}\n")
-        self.log_text.see(tk.END)
-
-    def clear_log(self):
-        self.log_text.delete("1.0", tk.END)
+    def toggle_advanced(self):
+        self.adv_expanded = not self.adv_expanded
+        if self.adv_expanded:
+            self.frame_advanced.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(4, 2))
+            self.btn_toggle_adv.config(text="▼ Ocultar Opções Avançadas")
+        else:
+            self.frame_advanced.grid_remove()
+            self.btn_toggle_adv.config(text="▶ Opções Avançadas (IP Local, VIP)")
 
     def on_ip_manually_edited(self):
         self.user_manually_edited_ip = True
@@ -543,444 +547,378 @@ class VpnApp:
             self.refresh_auto_ip()
 
     def refresh_auto_ip(self):
-        gw = self.entry_gateway.get().strip() or "198.51.100.100"
-        detected_ip = detect_local_ip(gw)
+        gateway = self.entry_gateway.get().strip() or cfgstore.DEFAULT_GATEWAY
+        detected = detect_local_ip(gateway)
         self.entry_local_ip.delete(0, tk.END)
-        self.entry_local_ip.insert(0, detected_ip)
+        self.entry_local_ip.insert(0, detected)
         self.user_manually_edited_ip = False
-        self.lbl_ip_info.config(text=f"Origem: {detected_ip} (Automático)")
-        self.log(f"IP local detectado automaticamente: {detected_ip}")
+        self.lbl_ip_info.config(text=f"Origem: {detected} (Automático)")
+        self.log(f"IP local detectado automaticamente: {detected}")
 
-    def load_initial_config(self):
-        """
-        Carrega as credenciais e configurações salvas do usuário.
-        O IP local é sempre obtido automaticamente por padrão, a menos que
-        o usuário tenha definido explicitamente um IP customizado.
-        """
-        cfg_path = self.get_config_path()
-        default_gw = "198.51.100.100"
-
-        # 1. Obter IP local automaticamente na primeira instância
-        detected_ip = detect_local_ip(default_gw)
-
-        if os.path.exists(cfg_path):
-            try:
-                with open(cfg_path, "r", encoding="utf-8") as f:
-                    cfg = json.load(f)
-
-                gw = cfg.get("gateway", default_gw)
-                self.entry_gateway.delete(0, tk.END)
-                self.entry_gateway.insert(0, gw)
-
-                # Se o usuário salvou uma personalização explícita de IP manual:
-                saved_manual_ip = cfg.get("custom_local_ip")
-                if saved_manual_ip:
-                    self.entry_local_ip.delete(0, tk.END)
-                    self.entry_local_ip.insert(0, saved_manual_ip)
-                    self.user_manually_edited_ip = True
-                    self.lbl_ip_info.config(text=f"Origem: {saved_manual_ip} (Manual)")
-                else:
-                    self.entry_local_ip.delete(0, tk.END)
-                    self.entry_local_ip.insert(0, detected_ip)
-                    self.user_manually_edited_ip = False
-                    self.lbl_ip_info.config(text=f"Origem: {detected_ip} (Automático)")
-
-                self.entry_user.delete(0, tk.END)
-                self.entry_user.insert(0, cfg.get("user", ""))
-
-                self.entry_pass.delete(0, tk.END)
-                self.entry_pass.insert(0, cfg.get("password", ""))
-
-                self.entry_psk.delete(0, tk.END)
-                self.entry_psk.insert(0, cfg.get("psk", ""))
-
-                self.var_save_creds.set(cfg.get("save_credentials", True))
-                self.log("Configurações salvas do usuário carregadas com sucesso.")
-                return
-            except Exception as e:
-                self.log(f"Aviso ao ler configurações salvas: {e}")
-
-        # Primeira execução (sem config prévia salva)
-        self.entry_gateway.delete(0, tk.END)
-        self.entry_gateway.insert(0, default_gw)
-
-        self.entry_local_ip.delete(0, tk.END)
-        self.entry_local_ip.insert(0, detected_ip)
-        self.user_manually_edited_ip = False
-        self.lbl_ip_info.config(text=f"Origem: {detected_ip} (Automático)")
-        self.log(f"IP local detectado automaticamente na inicialização: {detected_ip}")
-
-    def save_user_config(self, notify=True):
-        if not self.var_save_creds.get():
-            cfg_path = self.get_config_path()
-            if os.path.exists(cfg_path):
-                try:
-                    os.remove(cfg_path)
-                except Exception:
-                    pass
-            if notify:
-                messagebox.showinfo("Configurações", "Opção de salvar desmarcada. Dados locais anteriores removidos.")
-            return
-
-        cfg = {
+    def _current_config(self):
+        return {
             "gateway": self.entry_gateway.get().strip(),
             "user": self.entry_user.get().strip(),
             "password": self.entry_pass.get().strip(),
             "psk": self.entry_psk.get().strip(),
-            "save_credentials": True,
-            # Se o usuário editou manualmente, salva o IP; caso contrário salva vazio para manter auto-detecção
-            "custom_local_ip": self.entry_local_ip.get().strip() if self.user_manually_edited_ip else ""
+            "save_credentials": bool(self.var_save_creds.get()),
+            "custom_local_ip": self.entry_local_ip.get().strip() if self.user_manually_edited_ip else "",
+            "vip_strategy": self.var_vip_strategy.get(),
         }
 
+    def load_initial_config(self):
+        """
+        Carrega as credenciais salvas. O IP local é sempre automático por
+        padrão, a menos que o usuário tenha definido um IP customizado.
+        """
+        cfg = self.store.load_plain()
+        gateway = cfg.get("gateway") or cfgstore.DEFAULT_GATEWAY
+        detected = detect_local_ip(gateway)
+
+        self.entry_gateway.delete(0, tk.END)
+        self.entry_gateway.insert(0, gateway)
+
+        saved_manual_ip = cfg.get("custom_local_ip")
+        if saved_manual_ip:
+            self.entry_local_ip.delete(0, tk.END)
+            self.entry_local_ip.insert(0, saved_manual_ip)
+            self.user_manually_edited_ip = True
+            self.lbl_ip_info.config(text=f"Origem: {saved_manual_ip} (Manual)")
+        else:
+            self.entry_local_ip.delete(0, tk.END)
+            self.entry_local_ip.insert(0, detected)
+            self.user_manually_edited_ip = False
+            self.lbl_ip_info.config(text=f"Origem: {detected} (Automático)")
+
+        self.entry_user.delete(0, tk.END)
+        self.entry_user.insert(0, cfg.get("user", ""))
+        self.entry_pass.delete(0, tk.END)
+        self.entry_pass.insert(0, cfg.get("password", ""))
+        self.entry_psk.delete(0, tk.END)
+        self.entry_psk.insert(0, cfg.get("psk", ""))
+        self.var_save_creds.set(bool(cfg.get("save_credentials", True)))
+        self.var_vip_strategy.set(cfg.get("vip_strategy", "auto"))
+        self.log("Configurações salvas carregadas.")
+
+    def save_user_config(self, notify=True):
+        if not self.var_save_creds.get():
+            self.store.delete()
+            if notify:
+                messagebox.showinfo(
+                    "Configurações", "Opção de salvar desmarcada. Dados locais anteriores removidos."
+                )
+            return
+
         try:
-            cfg_path = self.get_config_path()
-            with open(cfg_path, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, indent=2)
-
-            if IS_LINUX:
-                os.chmod(cfg_path, 0o600)
-
+            path = self.store.save(self._current_config())
+            self.log(f"Configurações salvas em {path}")
             if notify:
-                self.log("✓ Configurações salvas com sucesso.")
                 messagebox.showinfo("Configurações", "Configurações salvas localmente com sucesso!")
-        except Exception as e:
-            self.log(f"Erro ao salvar configurações locais: {e}")
+        except Exception as exc:
+            self.log(f"Erro ao salvar configurações locais: {exc}")
             if notify:
-                messagebox.showerror("Erro", f"Falha ao salvar configurações: {e}")
+                messagebox.showerror("Erro", f"Falha ao salvar configurações: {exc}")
 
+    # ───────────────────────────────────────────────────────── status
+    def start_auto_refresh(self):
+        def loop():
+            while self._running:
+                try:
+                    status = self.engine.status()
+                except Exception as exc:
+                    status = Status(False, None, "", str(exc))
+                try:
+                    self.root.after(0, lambda s=status: self.apply_status(s))
+                except Exception:
+                    break
+                time.sleep(4)
+
+        threading.Thread(target=loop, daemon=True).start()
+
+    def apply_status(self, status):
+        self._last_status = status
+        connected = bool(status.connected)
+        vip = status.vip or "Ativo"
+
+        if connected:
+            self.lbl_status_icon.config(fg="#16a34a")
+            self.lbl_status_text.config(text=f"CONECTADO (IP: {vip})", fg="#16a34a")
+            self.lbl_ip_info.config(text=f"VIP Atribuído: {vip}")
+            self.lbl_vip_val.config(text=vip, fg="#16a34a")
+        else:
+            self.lbl_status_icon.config(fg="#ef4444")
+            self.lbl_status_text.config(text="DESCONECTADO", fg="#ef4444")
+            mode = "Manual" if self.user_manually_edited_ip else "Auto"
+            self.lbl_ip_info.config(text=f"Origem: {self.entry_local_ip.get()} ({mode})")
+            self.lbl_vip_val.config(text="Dinâmico (CPRP / FortiGate)", fg="#059669")
+
+        if not self._busy:
+            if connected:
+                self.btn_connect.config(state="disabled", bg="#94a3b8")
+                self.btn_disconnect.config(state="normal", bg="#dc2626")
+            else:
+                self.btn_connect.config(state="normal", bg="#16a34a")
+                self.btn_disconnect.config(state="disabled", bg="#94a3b8")
+
+    # ───────────────────────────────────────────────────── conexão
+    def _settings_for_engine(self):
+        cfg = self._current_config()
+        return {
+            "gateway": cfg["gateway"],
+            "local_ip": self.entry_local_ip.get().strip(),
+            "user": cfg["user"],
+            "password": cfg["password"],
+            "psk": cfg["psk"],
+            "vip_strategy": cfg["vip_strategy"],
+        }
+
+    def on_connect(self):
+        settings = self._settings_for_engine()
+
+        if not settings["gateway"]:
+            messagebox.showwarning("Campos Obrigatórios", "Informe o Gateway VPN.")
+            return
+
+        missing = []
+        if not settings["user"]:
+            missing.append("Usuário")
+        if not settings["password"]:
+            missing.append("Senha")
+        if not settings["psk"]:
+            missing.append("Chave PSK")
+        if missing:
+            messagebox.showwarning(
+                "Campos Obrigatórios", "Preencha: " + ", ".join(missing) + "."
+            )
+            return
+
+        if self.var_save_creds.get():
+            self.save_user_config(notify=False)
+
+        self._busy = True
+        self.btn_connect.config(state="disabled", bg="#94a3b8")
+        self.log(f"Iniciando conexão para o Gateway {settings['gateway']} (Usuário: {settings['user']})...")
+
+        def run():
+            try:
+                status = self.engine.connect(settings)
+            except Exception as exc:
+                status = Status(False, None, "", f"Erro inesperado: {exc}")
+            self._busy = False
+            if status.connected:
+                self.root.after(0, lambda s=status: self.log(f"✓ SUCESSO: VPN CONECTADA! {s.detail}"))
+            else:
+                self.root.after(0, lambda s=status: self.log(f"✗ {s.error}"))
+                if status.detail:
+                    self.root.after(0, lambda s=status: self.log(f"   Detalhe: {s.detail[:400]}"))
+                self.root.after(0, lambda: messagebox.showerror("Falha na conexão", status.error))
+            self.root.after(0, lambda s=status: self.apply_status(s))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def on_disconnect(self):
+        self._busy = True
+        self.btn_disconnect.config(state="disabled", bg="#94a3b8")
+        self.log("Desconectando da VPN...")
+
+        def run():
+            try:
+                status = self.engine.disconnect()
+            except Exception as exc:
+                status = Status(False, None, "", f"Erro inesperado: {exc}")
+            self._busy = False
+            self.root.after(0, lambda: self.log("✓ Desconectado."))
+            self.root.after(0, lambda s=status: self.apply_status(s))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    # ─────────────────────────────────────────────────── ferramentas
     def open_web_panel(self):
         self.log(f"Abrindo navegador padrão em: {WEB_URL}")
         self.root.clipboard_clear()
         self.root.clipboard_append(WEB_URL)
         webbrowser.open(WEB_URL)
 
-    def is_connected(self):
-        """Verifica o status da VPN de forma nativa e isolada por sistema operacional."""
-        if IS_WINDOWS:
-            try:
-                out = subprocess.check_output(
-                    ["rasdial"],
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    errors="replace",
-                    creationflags=WIN_CREATE_NO_WINDOW
-                )
-                return VPN_NAME_WIN.lower() in out.lower(), "Ativo"
-            except Exception:
-                return False, None
-        else:
-            try:
-                out = subprocess.check_output(["sudo", "swanctl", "--list-sas"], stderr=subprocess.STDOUT, text=True)
-                if "ESTABLISHED" in out and CHILD_NAME in out:
-                    vip_match = re.search(r"local.*?\[([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\]", out)
-                    if not vip_match:
-                        vip_match = re.search(r"local\s+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/32", out)
-                    vip = vip_match.group(1) if vip_match else "Ativo"
-                    return True, vip
-                return False, None
-            except Exception:
-                return False, None
-
-    def update_status(self):
-        res = self.is_connected()
-        connected = res[0] if isinstance(res, tuple) else res
-        vip = res[1] if isinstance(res, tuple) else "Ativo"
-
-        if connected:
-            self.lbl_status_icon.config(fg="#16a34a")
-            self.lbl_status_text.config(text=f"CONECTADO (IP: {vip})", fg="#16a34a")
-            self.lbl_ip_info.config(text=f"VIP Atribuído: {vip}")
-            self.btn_connect.config(state="disabled", bg="#94a3b8")
-            self.btn_disconnect.config(state="normal", bg="#dc2626")
-        else:
-            self.lbl_status_icon.config(fg="#ef4444")
-            self.lbl_status_text.config(text="DESCONECTADO", fg="#ef4444")
-            mode = "Manual" if self.user_manually_edited_ip else "Auto"
-            self.lbl_ip_info.config(text=f"Origem: {self.entry_local_ip.get()} ({mode})")
-            self.btn_connect.config(state="normal", bg="#16a34a")
-            self.btn_disconnect.config(state="disabled", bg="#94a3b8")
-
-    def start_auto_refresh(self):
-        def loop():
-            while True:
-                time.sleep(4)
-                try:
-                    self.root.after(0, self.update_status)
-                except Exception:
-                    break
-        threading.Thread(target=loop, daemon=True).start()
-
-    def save_conf_linux(self):
-        """Gera configuração swanctl exclusiva para Linux, apenas com credenciais fornecidas na GUI."""
-        gw = self.entry_gateway.get().strip()
-        local_ip = self.entry_local_ip.get().strip()
-        user = self.entry_user.get().strip()
-        pwd = self.entry_pass.get().strip()
-        psk = self.entry_psk.get().strip()
-
-        conf_content = f"""connections {{
-    forticlient {{
-        version  = 2
-        remote_addrs = {gw}
-        local_addrs  = {local_ip}
-        proposals    = aes256-sha256-modp8192, aes256-sha256-modp4096, aes128-sha256-modp4096, aes256-sha256-modp2048, aes256-sha1-modp2048, aes128-sha256-modp2048
-        encap        = yes
-        mobike       = no
-        dpd_delay    = 5s
-        keyingtries  = 0
-        rekey_time   = 86400s
-
-        vips = 0.0.0.0
-
-        local {{
-            auth     = eap-mschapv2
-            id       = {user}
-            eap_id   = {user}
-        }}
-
-        remote {{
-            auth = psk
-            id   = %any
-        }}
-
-        children {{
-            forticlient {{
-                remote_ts     = 0.0.0.0/0
-                local_ts      = dynamic
-                esp_proposals = aes256-sha256-modp8192, aes256-sha1-modp8192, aes128-sha256-modp8192, aes256-sha256, aes128-sha256
-                dpd_action    = restart
-                mode          = tunnel
-                rekey_time    = 43200s
-            }}
-        }}
-    }}
-}}
-
-secrets {{
-    ike-forticlient {{
-        secret = "{psk}"
-    }}
-    eap-forticlient {{
-        id     = {user}
-        secret = "{pwd}"
-    }}
-}}
-"""
-        subprocess.run(["sudo", "mkdir", "-p", "/etc/swanctl/conf.d"], capture_output=True)
-        subprocess.run(["sudo", "tee", CONF_FILE_LINUX], input=conf_content, text=True, capture_output=True)
-        subprocess.run(["sudo", "chmod", "600", CONF_FILE_LINUX], capture_output=True)
-        subprocess.run(["sudo", "swanctl", "--load-all"], capture_output=True)
-
-    def ensure_windows_vpn_configured(self, gw):
-        """
-        Configura o perfil nativo IKEv2 no Windows utilizando PowerShell nativo,
-        com suporte a catálogo AllUserConnection e elevação UAC transparente se necessário.
-        """
-        if not IS_WINDOWS:
-            return True, "OK"
-
-        # 1. Verificar se o perfil já existe no catálogo (AllUser ou User)
-        pbk_path = get_windows_phonebook_path()
-        if pbk_path:
-            try:
-                target_header = f"[{VPN_NAME_WIN}]".lower()
-                with open(pbk_path, "r", encoding="utf-8", errors="ignore") as f:
-                    if target_header in f.read().lower():
-                        return True, "Perfil já configurado"
-            except Exception:
-                pass
-
-        # 2. Verificar via PowerShell nativo (CurrentUser e AllUserConnection)
-        ps_check = (
-            f"$v = (Get-VpnConnection -Name '{VPN_NAME_WIN}' -AllUserConnection -ErrorAction SilentlyContinue); "
-            f"if (-not $v) {{ $v = (Get-VpnConnection -Name '{VPN_NAME_WIN}' -ErrorAction SilentlyContinue) }}; "
-            f"if ($v) {{ exit 0 }} else {{ exit 1 }}"
-        )
-        check_proc = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_check],
-            capture_output=True,
-            creationflags=WIN_CREATE_NO_WINDOW
-        )
-        if check_proc.returncode == 0:
-            return True, "Perfil já configurado"
-
-        self.log(f"Perfil '{VPN_NAME_WIN}' não encontrado. Configurando no Windows...")
-
-        ps_config_commands = (
-            f"Add-VpnConnection -Name '{VPN_NAME_WIN}' -ServerAddress '{gw}' -TunnelType 'IKEv2' "
-            f"-AuthenticationMethod 'EAP' -EncryptionLevel 'Required' -SplitTunneling $true -AllUserConnection -Force; "
-            f"Set-VpnConnectionIPsecConfiguration -ConnectionName '{VPN_NAME_WIN}' -AuthenticationTransformConstants GCMAES256 "
-            f"-CipherTransformConstants GCMAES256 -EncryptionMethod AES256 -IntegrityCheckMethod SHA256 -DHGroup Group18 "
-            f"-PfsGroup PFS2048 -AllUserConnection -Force"
-        )
-
-        if is_windows_admin():
-            proc = subprocess.run(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_config_commands],
-                capture_output=True,
-                text=True,
-                errors="replace",
-                creationflags=WIN_CREATE_NO_WINDOW
-            )
-            if proc.returncode == 0:
-                self.log(f"✓ Perfil '{VPN_NAME_WIN}' criado com sucesso no catálogo global do Windows.")
-                return True, "Criado com sucesso"
-            else:
-                err_text = proc.stderr.strip() or proc.stdout.strip()
-                return False, f"Falha ao criar perfil VPN: {err_text[:120]}"
-        else:
-            self.log("[*] Solicitando permissão de Administrador para registrar conexão no catálogo do Windows...")
-            elevate_script = (
-                f"$proc = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList "
-                f"'-NoProfile -ExecutionPolicy Bypass -Command \"{ps_config_commands}\"'; "
-                f"exit $proc.ExitCode"
-            )
-            subprocess.run(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", elevate_script],
-                capture_output=True,
-                text=True,
-                errors="replace"
-            )
-            recheck = get_windows_phonebook_path()
-            if recheck:
-                try:
-                    with open(recheck, "r", encoding="utf-8", errors="ignore") as f:
-                        if f"[{VPN_NAME_WIN}]".lower() in f.read().lower():
-                            self.log(f"✓ Perfil '{VPN_NAME_WIN}' registrado no catálogo com privilégios administrativos.")
-                            return True, "Criado com sucesso"
-                except Exception:
-                    pass
-
-            return False, "Permissão de Administrador necessária para criar a conexão VPN no Windows."
-
-    def on_connect(self):
-        gw = self.entry_gateway.get().strip()
-        user = self.entry_user.get().strip()
-        pwd = self.entry_pass.get().strip()
-
-        if not user or not pwd:
-            messagebox.showwarning("Campos Obrigatórios", "Por favor, preencha Usuário e Senha para conectar.")
-            return
-
-        if self.var_save_creds.get():
-            self.save_user_config(notify=False)
-
-        self.log(f"Iniciando conexão para Gateway {gw} (Usuário: {user})...")
-        self.btn_connect.config(state="disabled")
-
-        def run():
-            if IS_WINDOWS:
-                try:
-                    success, msg = self.ensure_windows_vpn_configured(gw)
-                    if not success:
-                        self.root.after(0, lambda: self.log(f"✗ {msg}"))
-                        self.root.after(0, self.update_status)
-                        return
-
-                    pbk_path = get_windows_phonebook_path()
-                    cmd = ["rasdial", VPN_NAME_WIN, user, pwd]
-                    if pbk_path:
-                        cmd.append(f"/phonebook:{pbk_path}")
-
-                    proc = subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        text=True,
-                        errors="replace",
-                        creationflags=WIN_CREATE_NO_WINDOW
-                    )
-                    if proc.returncode == 0:
-                        self.root.after(0, lambda: self.log("✓ SUCESSO: VPN CONECTADA no Windows!"))
-                    else:
-                        out = proc.stdout.strip() or proc.stderr.strip()
-                        err_msg = parse_windows_rasdial_error(out)
-                        self.root.after(0, lambda: self.log(f"✗ {err_msg}"))
-                except Exception as e:
-                    self.root.after(0, lambda: self.log(f"✗ Erro de execução no Windows: {e}"))
-            else:
-                self.save_conf_linux()
-                subprocess.run(["sudo", "ip", "rule", "add", "lookup", "220", "pref", "220"], capture_output=True)
-                proc = subprocess.run(["sudo", "swanctl", "--initiate", "--child", CHILD_NAME], capture_output=True, text=True)
-                output = proc.stdout + proc.stderr
-                lines = [l for l in output.splitlines() if "agent plugin" not in l and "plugin 'agent'" not in l]
-                clean_output = "\n".join(lines)
-
-                res = self.is_connected()
-                connected = res[0] if isinstance(res, tuple) else res
-                vip = res[1] if isinstance(res, tuple) else "Ativo"
-                if proc.returncode == 0 and connected:
-                    self.root.after(0, lambda: self.log(f"✓ SUCESSO: VPN CONECTADA! IP Virtual atribuído: {vip}"))
-                else:
-                    lower_output = clean_output.lower()
-                    if "authentication_failure" in lower_output or "authentication failed" in lower_output or "eap_mschapv2 method failed" in lower_output or "auth_failed" in lower_output:
-                        self.root.after(0, lambda: self.log("✗ Falha de Autenticação: Verifique sua senha (sem caracteres adicionais como #) ou usuário."))
-                    elif "retransmit" in lower_output or "timed out" in lower_output:
-                        self.root.after(0, lambda: self.log(f"✗ Timeout: Sem resposta do Gateway {gw} na porta 500."))
-                    elif "no_proposal_chosen" in lower_output:
-                        self.root.after(0, lambda: self.log("✗ FortiGate respondeu NO_PROPOSAL_CHOSEN."))
-                    else:
-                        err_lines = [l.strip() for l in lines if l.strip() and not l.startswith("[NET]") and not l.startswith("[ENC]")]
-                        last_err = " | ".join(err_lines[-3:]) if err_lines else clean_output.strip()[:140]
-                        self.root.after(0, lambda: self.log(f"✗ Falha ao conectar: {last_err[:160]}"))
-
-            self.root.after(0, self.update_status)
-
-        threading.Thread(target=run, daemon=True).start()
-
-    def on_disconnect(self):
-        self.log("Desconectando da VPN...")
-        self.btn_disconnect.config(state="disabled")
-
-        def run():
-            if IS_WINDOWS:
-                cmd = ["rasdial", VPN_NAME_WIN, "/disconnect"]
-                pbk_path = get_windows_phonebook_path()
-                if pbk_path:
-                    cmd.append(f"/phonebook:{pbk_path}")
-                subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    errors="replace",
-                    creationflags=WIN_CREATE_NO_WINDOW
-                )
-            else:
-                subprocess.run(["sudo", "swanctl", "--terminate", "--ike", CHILD_NAME], capture_output=True)
-
-            self.root.after(0, lambda: self.log("✓ VPN Desconectada."))
-            self.root.after(0, self.update_status)
-
-        threading.Thread(target=run, daemon=True).start()
-
-
     def on_test_web(self):
-        self.log("Testando acesso ao Painel Web FortiOS (https://10.64.10.1:6464)...")
+        self.log(f"Testando acesso ao Painel Web FortiOS ({WEB_URL})...")
+
         def run():
             try:
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-                req = urllib.request.Request(WEB_URL, headers={"User-Agent": "Mozilla/5.0"})
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                request = urllib.request.Request(WEB_URL, headers={"User-Agent": "Mozilla/5.0"})
                 code = None
                 try:
-                    with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
-                        code = resp.getcode()
-                except urllib.error.HTTPError as e:
-                    code = e.code # Códigos HTTP como 401, 403 indicam que o servidor web interno respondeu
+                    with urllib.request.urlopen(request, timeout=5, context=context) as response:
+                        code = response.getcode()
+                except urllib.error.HTTPError as exc:
+                    code = exc.code
 
                 if code in (200, 401, 403, 405):
-                    self.root.after(0, lambda: self.log(f"✓ ACESSO CONFIRMADO! Código HTTP {code} OK (Painel FortiOS online)"))
+                    message = f"✓ ACESSO CONFIRMADO! Código HTTP {code} (Painel FortiOS online)"
                 elif code:
-                    self.root.after(0, lambda: self.log(f"✓ Servidor respondeu com código HTTP {code}"))
+                    message = f"✓ Servidor respondeu com código HTTP {code}"
                 else:
-                    self.root.after(0, lambda: self.log("✗ Não foi possível carregar a página (verifique se a VPN está conectada)."))
-            except Exception as e:
-                self.root.after(0, lambda: self.log(f"✗ Erro no teste de rede: {e}"))
+                    message = "✗ Sem resposta (verifique se a VPN está conectada)."
+            except Exception as exc:
+                message = f"✗ Erro no teste de rede: {exc}"
+            self.root.after(0, lambda: self.log(message))
 
         threading.Thread(target=run, daemon=True).start()
+
+    def on_export_diagnostics(self):
+        self.log("Coletando diagnóstico...")
+
+        def run():
+            try:
+                info = self.engine.diagnose()
+                path = cfgstore.build_diagnostics(
+                    cfg=self.store.load(), extra_text=info, log_file=cfgstore.log_path()
+                )
+                message = f"Diagnóstico salvo em:\n{path}"
+                self.log(f"✓ Diagnóstico salvo em: {path}")
+            except Exception as exc:
+                message = f"Falha ao gerar diagnóstico: {exc}"
+                self.log(f"✗ {message}")
+            self.root.after(0, lambda: messagebox.showinfo("Diagnóstico", message))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _maybe_cleanup_on_first_run(self):
+        """
+        Remove resíduos de versões antigas no primeiro arranque após atualizar.
+
+        Feito no processo do usuário (não no instalador) para que as chaves de
+        HKCU e o perfil RAS corretos sejam os do próprio usuário.
+        """
+        marker = os.path.join(cfgstore.state_dir(), ".cleanup-v2.done")
+        if os.path.exists(marker):
+            return
+
+        def run():
+            try:
+                removed = self.engine.cleanup_conflicts()
+                if removed:
+                    self.root.after(0, lambda r=removed: self.log("Limpeza automática: " + ", ".join(r)))
+            except Exception as exc:
+                self.logger.warning("Limpeza automática falhou: %s", exc)
+            try:
+                cfgstore.ensure_dir(cfgstore.state_dir())
+                with open(marker, "w", encoding="utf-8") as handle:
+                    handle.write(cfgstore.app_version())
+            except OSError:
+                pass
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def on_cleanup_conflicts(self):
+        self.log("Procurando resíduos de versões anteriores...")
+
+        def run():
+            try:
+                removed = self.engine.cleanup_conflicts()
+            except Exception as exc:
+                removed = []
+                self.log(f"✗ Falha na limpeza: {exc}")
+            if removed:
+                message = "Removido:\n- " + "\n- ".join(removed)
+                self.log("✓ Limpeza concluída: " + ", ".join(removed))
+            else:
+                message = "Nenhum resíduo encontrado (ou nada a remover nesta plataforma)."
+                self.log("✓ " + message)
+            self.root.after(0, lambda: messagebox.showinfo("Limpar conflitos", message))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def on_close(self):
+        self._running = False
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+
+
+# ═══════════════════════════════════════════════════════════ modo CLI
+
+def _cli_settings(store):
+    cfg = store.load_plain()
+    gateway = cfg.get("gateway") or cfgstore.DEFAULT_GATEWAY
+    return {
+        "gateway": gateway,
+        "local_ip": cfg.get("custom_local_ip") or detect_local_ip(gateway),
+        "user": cfg.get("user", ""),
+        "password": cfg.get("password", ""),
+        "psk": cfg.get("psk", ""),
+        "vip_strategy": cfg.get("vip_strategy", "auto"),
+    }
+
+
+def run_cli(args):
+    """
+    Modo sem interface gráfica: essencial no Windows, onde o executável é GUI
+    e uma falha sem log é impossível de investigar.
+    """
+    logger = cfgstore.setup_logging()
+    store = cfgstore.ConfigStore()
+    engine = VpnEngine(logger=logger)
+    logger.info("CLI: %s", vars(args))
+
+    if args.diagnose:
+        info = engine.diagnose()
+        path = cfgstore.build_diagnostics(cfg=store.load(), extra_text=info, log_file=cfgstore.log_path())
+        print(f"Diagnostico salvo em: {path}")
+        print(f"Log: {cfgstore.log_path()}")
+        return 0
+
+    if args.cleanup:
+        removed = engine.cleanup_conflicts()
+        print("Removido: " + (", ".join(removed) if removed else "nada"))
+        return 0
+
+    settings = _cli_settings(store)
+    if args.connect:
+        if not settings["user"] or not settings["password"] or not settings["psk"]:
+            print("Erro: usuario, senha e PSK precisam estar salvos (use a interface grafica).")
+            return 2
+        status = engine.connect(settings)
+        if status.connected:
+            print(f"OK: conectado ({status.detail})")
+            return 0
+        print(f"ERRO: {status.error}")
+        if status.detail:
+            print(f"Detalhe: {status.detail}")
+        return 1
+
+    if args.disconnect:
+        engine.disconnect()
+        print("OK: desconectado")
+        return 0
+
+    print("Nada a fazer. Use --connect, --disconnect, --diagnose ou --cleanup.")
+    return 2
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(description="FortiClient VPN Manager (DTIC/PRODEPA)")
+    parser.add_argument("--connect", action="store_true", help="conecta usando as credenciais salvas")
+    parser.add_argument("--disconnect", action="store_true", help="desconecta a VPN")
+    parser.add_argument("--diagnose", action="store_true", help="gera pacote de diagnostico e sai")
+    parser.add_argument("--cleanup", action="store_true", help="remove residuos de versoes anteriores e sai")
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
+    if args.connect or args.disconnect or args.diagnose or args.cleanup:
+        return run_cli(args)
+
+    cfgstore.setup_logging()
+    root = tk.Tk()
+    VpnApp(root)
+    root.mainloop()
+    return 0
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = VpnApp(root)
-    root.mainloop()
+    sys.exit(main())

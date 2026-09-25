@@ -1,31 +1,12 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-
-# Ambientes virtuais
-env/
-venv/
-.venv/
-
-# Configurações com credenciais locais
-*.conf
-*.key
-*.pem
-*.secret
-config.json
-!config/*.example
-
-# Compilação e empacotamento
-build/
 dist/
-distribuir/linux/*.deb
-*.spec.bak
-
-# Logs do sistema e temporários
+build/output/
+build/cache/
+vendor/windows/*.exe
+vendor/windows/*.dll
+*.pyc
+__pycache__/
+*.egg-info/
+venv/
+.env
+build_info.py
 *.log
-.DS_Store
-.vscode/
-.idea/

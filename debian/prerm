@@ -1,0 +1,8 @@
+#!/bin/bash
+set -e
+
+rm -f /etc/sudoers.d/forticlient-vpn
+
+if command -v swanctl >/dev/null 2>&1; then
+    swanctl --terminate --ike forticlient >/dev/null 2>&1 || true
+fi

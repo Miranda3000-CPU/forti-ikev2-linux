@@ -1,131 +1,177 @@
-# 🛡️ FortiClient VPN Manager - Multiplataforma (Linux & Windows)
+# 🛡️ FortiClient VPN - DTIC / PRODEPA
 
-Aplicativo com **Interface Gráfica Nativa** e identidade visual institucional (DTIC), desenvolvido para conexão a VPNs corporativas **FortiGate (Fortinet)** utilizando o protocolo **IKEv2 / IPsec**, autenticação dupla (**Pre-Shared Key + EAP-MSCHAPv2**) e IP Virtual dinâmico (CPRP).
+Interface gráfica para conexão VPN IKEv2 (FortiGate) com autenticação
+**EAP-MSCHAPv2 + PSK**. Não depende do FortiClient: o motor é o
+[strongSwan](https://www.strongswan.org/) nos dois sistemas operacionais.
 
----
+## Como funciona
 
-## 💻 Recursos da Aplicação Gráfica
+|              | Linux                                       | Windows                                              |
+| ------------ | ------------------------------------------- | ---------------------------------------------------- |
+| Motor        | strongSwan do sistema (`swanctl`)           | strongSwan vendorizado em `vendor/windows/`           |
+| Privilégio   | `sudo swanctl` (regras em `/etc/sudoers.d`) | GUI como usuário; UAC só para serviço/IKEEXT/VIP      |
+| Configuração | `/etc/swanctl/conf.d/forti.conf`            | `%APPDATA%\FortiClientVPN\swanctl\conf.d\forti.conf`  |
 
-- **Ícone Institucional Personalizado:** O logotipo DTIC (`assets/dtic-logo-whasapp.jpeg`) é recortado dinamicamente em formato **redondo**, utilizado tanto no cabeçalho da janela, barra de tarefas, atalhos do sistema e executável.
-- **Segurança de Credenciais:** As credenciais (Usuário, Senha e PSK) **NÃO** ficam gravadas no código-fonte nem no Git. Elas são salvas localmente no computador do usuário (`~/.config/forticlient-vpn/config.json` no Linux com permissão `0600`, ou `%APPDATA%\FortiClientVPN\config.json` no Windows) apenas após o cadastro na interface.
-- **Multiplataforma Nativa:**
-  - **Windows:** Executável portátil (`.exe`) e integração com `rasdial` / PowerShell VPN API.
-  - **Linux:** Pacote `.deb` nativo para Debian/Ubuntu e script instalador para Fedora/Arch (via `strongSwan / swanctl`).
-- **Conexão e Desconexão com 1 Clique:** Detecção em tempo real de status e captura automática do IP Virtual (VIP) atribuído.
-- **Acesso Direto ao Painel Web:** Botão rápido para abrir `https://10.64.10.1:6464` no navegador padrão e teste integrado de conectividade HTTP.
+A configuração `swanctl.conf` é **a mesma** nos dois sistemas.
 
----
+### Por que não usar o IKEv2 nativo do Windows?
 
-## 📂 Estrutura do Repositório
+O cliente IKEv2 do próprio Windows só aceita certificado X.509 ou
+EAP-MSCHAPv2, e **exige que o gateway se autentique com certificado**. Este
+FortiGate se autentica com **PSK**, combinação que o Windows não suporta. Por
+isso o motor é o strongSwan, que fala PSK + EAP-MSCHAPv2.
 
-```text
-forticlient-vpn-linux/
-├── assets/
-│   ├── dtic-logo-whasapp.jpeg      # Logotipo oficial DTIC
-│   ├── icon.png                    # Ícone recortado redondo (PNG)
-│   ├── icon.ico                    # Ícone multi-resolução para Windows (.exe)
-│   └── forticlient-vpn.desktop     # Lançador para o menu de aplicativos Linux
-├── config/
-│   └── forti.conf.example          # Modelo swanctl com placeholders
-├── dist/                           # Executáveis gerados (.deb e .exe)
-├── vpn-gui.py                      # Aplicação gráfica Python (Tkinter + PIL)
-├── FortiClient-VPN.spec            # Especificação PyInstaller para gerar executável Windows
-├── build_windows.bat               # Script para compilar o .exe no Windows
-├── build_deb.sh                    # Script para gerar o pacote .deb no Linux
-├── install.sh                      # Instalador de script para Linux
-├── install.ps1                     # Instalador/configurador para Windows PowerShell
-├── uninstall.sh                    # Desinstalador Linux
-├── requirements.txt                # Dependências Python (Pillow)
-└── README.md                       # Documentação
-```
+## Instalação
 
----
-
-# 🐧 Instalação e Execução no LINUX
-
-Compatível com **Ubuntu (20.04+)**, **Debian (11+)**, **Linux Mint**, **Pop!_OS**, **Fedora** e **Arch**.
-
-### Opção 1: Inicialização Simplificada e Anti-Interferência (Recomendada)
-
-Ideal para desenvolvimento e ambientes corporativos com antivírus/EDR:
+### Linux (Debian/Ubuntu)
 
 ```bash
-chmod +x iniciar_linux.sh
-./iniciar_linux.sh
+./build/build_deb.sh
+sudo dpkg -i dist/forticlient-vpn_1.0.0_amd64.deb
 ```
 
-O `iniciar_linux.sh`:
-- Diagnostica e satisfaz automaticamente todas as dependências do sistema (`strongswan`, `python3-tk`, `python3-pil`).
-- Configura as permissões estritas em `/etc/sudoers.d/forticlient-vpn` validadas com `visudo -cf`, evitando travamento de interface gráfica por falta de TTY e prevenindo alertas heurísticos de antivírus.
-- Cria o atalho oficial na Área de Trabalho (`FortiClient-VPN.desktop`) com o ícone DTIC já marcado como confiável.
+Ou, sem empacotar: `sudo ./install.sh`.
 
----
+### Windows
 
-### Opção 2: Instalação via Pacote `.deb` (Debian / Ubuntu)
+Você **não precisa compilar nada**. Duas opções:
 
-Você pode instalar o pacote diretamente gerado na pasta `dist/`:
+**Opção A — baixar pronto (recomendado)**
+1. No repositório, abra a aba **Actions → "Instalador Windows" → Run workflow**.
+2. Quando terminar, baixe o artefato **FortiClient-VPN-Setup**.
+3. Leve o `FortiClient-VPN-Setup.exe` para o Windows e execute (aceite o UAC).
+
+**Opção B — gerar na sua máquina com um comando**
+```bash
+./build/preparar_instalador_windows.sh
+```
+Esse único comando instala o que faltar (MinGW, Wine), compila o motor
+strongSwan, instala Python e Inno Setup dentro do Wine e gera
+`dist/FortiClient-VPN-Setup.exe`.
+
+O instalador registra e **inicia** o serviço `strongSwan IKE service`, libera as
+portas UDP 500/4500 e remove resíduos de versões antigas. O aplicativo ainda se
+recupera sozinho se algo faltar: sobe o motor em segundo plano, para o serviço
+`IKEEXT` por dois caminhos diferentes, tenta instalar o IP virtual em todas as
+interfaces ativas e, se não conseguir em nenhuma, conecta mesmo assim.
+
+## Como usar
+
+1. Preencha **Gateway**, **Chave PSK**, **Usuário** e **Senha**.
+2. Clique **▶ CONECTAR VPN**.
+3. **Opções Avançadas** contém o IP local (detecção automática) e a estratégia
+   de VIP.
+
+### Modo sem interface (diagnóstico)
+
+O executável do Windows é GUI, então falhas não aparecem em terminal. Use:
+
+```bat
+FortiClient-VPN.exe --diagnose     :: gera um .zip com tudo que é preciso
+FortiClient-VPN.exe --connect      :: conecta com as credenciais salvas
+FortiClient-VPN.exe --disconnect
+FortiClient-VPN.exe --cleanup      :: remove resíduos de versões antigas
+```
+
+O log fica em `%LOCALAPPDATA%\FortiClientVPN\logs\app.log` (Windows) e
+`~/.local/state/forticlient-vpn/logs/app.log` (Linux).
+
+## Compilação
+
+### Linux
 
 ```bash
-# 1. Gerar o pacote .deb (se ainda não gerado)
-./build_deb.sh
-
-# 2. Instalar o pacote
-sudo apt install ./dist/forticlient-vpn_1.0.0_all.deb
+./build/build_deb.sh         # gera dist/forticlient-vpn_1.0.0_amd64.deb
 ```
 
----
+### Windows (a partir do Linux ou pelo CI)
 
-### Opção 3: Instalação Completa via Script (`install.sh`)
+**Um comando, sem preparar nada:**
+```bash
+./build/preparar_instalador_windows.sh     # gera dist/FortiClient-VPN-Setup.exe
+```
+
+Ou deixe o **GitHub Actions** fazer (aba *Actions → Instalador Windows*):
+o workflow compila o motor com MSYS2, roda os testes, gera o `.exe` e publica o
+instalador como artefato.
+
+Passos manuais (só se quiser controle fino):
+```bash
+sudo apt install build-essential mingw-w64 wine curl bzip2 perl make
+./build/build_strongswan_windows.sh        # motor strongSwan para Windows
+./build/build_windows.sh                   # .exe (PyInstaller/Wine) + instalador
+```
+`ISCC=/caminho/ISCC.exe`, `WINE_PYTHON=C:/Python312/python.exe` e
+`WINE_BIN=wine` permitem ajustar caminhos.
+
+## Testes
 
 ```bash
-chmod +x install.sh uninstall.sh vpn-gui.py build_deb.sh iniciar_linux.sh
-./install.sh
+python3 -m unittest discover -s tests -v
 ```
 
----
+## Limitações conhecidas no Windows
 
-# 🪟 Instalação e Execução no WINDOWS
+- **IP virtual:** o backend `kernel-iph` do strongSwan no Windows não instala
+  VIPs de cliente, então o aplicativo faz isso em cascata (interface padrão →
+  demais interfaces ativas → seguir sem VIP). Nada precisa ser decidido por
+  você; o resultado aparece no log.
+- **Serviço `IKEEXT`:** é interrompido na instalação e reconferido a cada
+  conexão, pois ocupa as portas UDP 500/4500. É restaurado na desinstalação.
+- **SmartScreen:** o instalador não é assinado digitalmente. O Windows pode
+  exibir aviso em *Mais informações → Executar assim mesmo*. A solução
+  definitiva é assinar com um certificado interno (`signtool`).
+- **Licença:** o strongSwan é GPLv2 — ver `NOTICE` antes de redistribuir.
 
-Compatível com **Windows 10** e **Windows 11**.
+## Diagnóstico de problemas
 
-### Opção 1: Execução via Código-Fonte com Atalho Administrador (Recomendada contra Antivírus)
+| Sintoma                              | Causa provável / ação                            |
+| ------------------------------------ | ------------------------------------------------ |
+| "Motor strongSwan não encontrado"    | `vendor/windows` ausente — reinstale o pacote.    |
+| "Conflito de portas IKE (`IKEEXT`)"  | `sc stop IKEEXT` (o app tenta automaticamente).   |
+| "Falha de autenticação"              | Usuário/senha, ou PSK incorreta.                  |
+| "Tempo esgotado"                     | Gateway inacessível ou UDP 500/4500 bloqueado.    |
+| "CHILD_SA config 'forticlient' not found" | O swanctl não encontrou o `conf.d` — ver abaixo. |
+| Status fica "DESCONECTADO" conectado | Envie o `--diagnose`; veja `swanctl --list-sas`.  |
 
-Esta abordagem **elimina 100% dos falsos positivos** causados por empacotadores binários (PyInstaller), executando o código legítimo diretamente:
+### Onde o swanctl procura a configuração (já resolvido no código)
 
-1. Dê um duplo-clique no arquivo **`criar_atalho_windows.bat`**.
-2. Um atalho oficial chamado **`FortiClient VPN`** com o ícone DTIC será criado na sua Área de Trabalho.
-3. Ao clicar no atalho:
-   - O Windows abre a janela UAC solicitando privilégios de Administrador.
-   - O terminal CMD verifica a presença do Python e instala automaticamente todas as dependências (`pip install -r requirements.txt`).
-   - O perfil nativo IKEv2 / Diffie-Hellman Group 18 é validado no subsistema de rede.
-   - A aplicação gráfica é iniciada com autoridade administrativa total, permitindo a conexão imediata.
+O `swanctl` resolve o diretório de configuração assim:
 
----
-
-### Opção 2: Gerar Executável Portátil (`.exe`)
-
-1. Dê um duplo-clique no arquivo **`build_windows.bat`**.
-2. O executável será compilado em `dist\FortiClient-VPN.exe`.
-
----
-
-### Opção 3: Configuração do Perfil de Rede via PowerShell
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\install.ps1
+```
+file        = <swanctl_dir>/strongswan.conf   # aborta se não encontrar
+swanctl_dir = dirname(file)                   # passa a valer este
+conexões    = <swanctl_dir>/conf.d/*.conf
 ```
 
----
+Ou seja, `conf.d/` é **irmão direto** do `strongswan.conf` que ele encontrou. Se
+o `swanctl.exe` for executado na pasta do motor, ele acha o `strongswan.conf` de
+lá e procura `conf.d/` no lugar errado: carrega **zero conexões**, retorna
+código 0 (sem erro) e só falha depois, no `--initiate`.
 
-## 🔐 Configuração das Credenciais na Interface
+Por isso o aplicativo grava e executa sempre a partir de:
 
-Ao abrir o programa pela primeira vez:
-1. **Gateway VPN:** `198.51.100.100` (ou IP corporativo fornecido)
-2. **Meu IP Local:** Detectado automaticamente pela interface de rede
-3. **Usuário (EAP):** Seu usuário institucional
-4. **Senha:** Sua senha de rede
-5. **Chave PSK:** Chave pré-compartilhada fornecida pela DTIC
-6. Clique em **💾 Salvar Configurações** (ou clique diretamente em **▶ CONECTAR VPN** com a caixa "Salvar dados neste computador" marcada).
+```
+%APPDATA%\FortiClientVPN\strongswan.conf
+%APPDATA%\FortiClientVPN\conf.d\forti.conf
+```
 
-Suas credenciais serão salvas de forma segura no seu próprio diretório de usuário e **nunca** serão enviadas a repositórios.
+com `cwd` e `SWANCTL_DIR` apontando para `%APPDATA%\FortiClientVPN` — o mesmo
+lugar, pelas duas formas de resolução.
+
+Sempre que possível, anexe o `.zip` gerado por **Exportar diagnóstico**.
+
+## Estrutura do projeto
+
+- `vpn-gui.py`: interface gráfica, modo CLI e empacotamento.
+- `vpn_engine.py`: motor VPN (configuração, comandos, status, erros).
+- `vpn_config.py`: credenciais (DPAPI no Windows), logging e diagnóstico.
+- `build/`: empacotamento (`build_deb.sh`, `build_windows.sh`,
+  `build_strongswan_windows.sh`, spec do PyInstaller, Inno Setup).
+- `vendor/windows/`: motor strongSwan para Windows (não versionado).
+- `tests/`: testes unitários.
+- `debian/`, `config/`, `assets/`: empacotamento Linux, exemplos e ícones.
+
+## Licença
+
+Distribuído sob licença interna. Componentes de terceiros em `NOTICE`.

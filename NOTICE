@@ -1,0 +1,40 @@
+# Avisos de licença e componentes de terceiros
+
+## strongSwan (motor VPN no Windows)
+
+O pacote Windows do FortiClient VPN Manager **não inclui o FortiClient**. Ele
+inclui o motor **strongSwan** compilado para Windows
+(`vendor/windows/charon-svc.exe`, `vendor/windows/swanctl.exe`), que implementa
+IKEv2 com autenticação por PSK e EAP-MSCHAPv2.
+
+- Projeto: https://www.strongswan.org/
+- Código-fonte: https://github.com/strongswan/strongswan
+- Licença: **GNU General Public License v2.0 (GPLv2)**
+
+Ao redistribuir o instalador, a GPLv2 exige a oferta do código-fonte
+correspondente (incluindo eventuais modificações):
+
+1. publique o tarball usado na compilação (`STRONGSWAN_VERSION`, ver
+   `build/build_strongswan_windows.sh`), ou
+2. inclua uma oferta escrita válida (GPLv2 §3) de fornecimento do fonte por, no
+   mínimo, três anos.
+
+O OpenSSL embutido é distribuído sob a licença Apache 2.0
+(https://www.openssl.org/source/license.html).
+
+No **Linux**, o strongSwan é instalado como dependência do sistema
+(`strongswan`, `strongswan-swanctl`) e a GPLv2 já é satisfeita pela distribuição.
+
+## Demais dependências
+
+| Componente | Uso                          | Licença          |
+| ---------- | ---------------------------- | ---------------- |
+| Pillow     | ícones da interface          | MIT-CMU          |
+| PyInstaller| empacotamento do `.exe`      | GPLv2 + exceção  |
+| Inno Setup | instalador Windows           | livre (ver site) |
+
+## Marcas
+
+"Fortinet", "FortiGate" e "FortiClient" são marcas da Fortinet, Inc. Este
+projeto é um cliente alternativo mantido pela DTIC/PRODEPA e **não** é
+endossado pela Fortinet.
