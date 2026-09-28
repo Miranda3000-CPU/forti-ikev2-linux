@@ -22,6 +22,8 @@ die() { printf '\033[1;31m[erro]\033[0m %s\n' "$*" >&2; exit 1; }
 
 command -v gcc >/dev/null 2>&1 || die "gcc do MinGW não encontrado (abra o shell MINGW64)."
 command -v make >/dev/null 2>&1 || die "make não encontrado."
+(command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1) \
+  || die "Python não encontrado no MSYS2 (instale mingw-w64-x86_64-python). O ./configure do strongSwan usa Python para resolver os construtores estáticos de plugin (--enable-monolithic)."
 
 mkdir -p "$BUILD_DIR" "$OUT_DIR"
 cd "$BUILD_DIR"

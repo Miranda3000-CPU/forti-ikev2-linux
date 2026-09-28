@@ -119,6 +119,7 @@ jobs:
             perl
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-openssl
+            mingw-w64-x86_64-python
             mingw-w64-x86_64-pkgconf
 
       - name: Compilar o motor strongSwan para Windows
