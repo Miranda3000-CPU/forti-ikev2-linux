@@ -4,6 +4,18 @@ Interface gráfica para conexão VPN IKEv2 (FortiGate) com autenticação
 **EAP-MSCHAPv2 + PSK**. Não depende do FortiClient: o motor é o
 [strongSwan](https://www.strongswan.org/) nos dois sistemas operacionais.
 
+## Demonstração
+
+| Tela principal                                | Opções avançadas (IP local, VIP)            |
+| --------------------------------------------- | ------------------------------------------- |
+| ![Tela principal](screenshots/demo-principal.png) | ![Opções avançadas](screenshots/demo-opcoes-avancadas.png) |
+
+Na tela principal você preenche gateway, usuário, senha e a chave PSK salvos
+localmente. O IP de origem é detectado automaticamente (ou definido à mão em
+**Opções Avançadas**), o IP virtual é negociado dinamicamente com o FortiGate
+(CPRP) e a ferramenta ainda traz validar HTTP, exportar diagnóstico e limpar
+conflitos de rota.
+
 ## Instalação
 
 **Você não precisa compilar nada (Linux).** Baixe o pacote pronto da
