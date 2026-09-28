@@ -1,0 +1,12 @@
+name: Teste Direto das Labels
+on: [push]
+jobs:
+  teste-ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Ubuntu funcionando!"
+
+  teste-windows:
+    runs-on: windows-latest
+    steps:
+      - run: echo "Windows emulado funcionando!"
