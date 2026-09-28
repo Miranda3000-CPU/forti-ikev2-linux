@@ -4,7 +4,7 @@ Section: net
 Priority: optional
 Architecture: all
 Depends: python3 (>= 3.8), python3-tk, python3-pil, python3-pil.imagetk, strongswan, strongswan-swanctl
-Maintainer: DTIC / PRODEPA <jeielmiranda@duck.com>
+Maintainer: Jeiel Miranda <jeielmiranda@duck.com>
 Description: FortiClient VPN - Interface Gráfica para VPN FortiGate IKEv2
  Interface gráfica simplificada para conexão VPN IKEv2 com
  FortiGate usando strongSwan. Compatível com autenticação

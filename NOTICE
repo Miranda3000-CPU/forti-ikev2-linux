@@ -2,12 +2,12 @@
 
 ## Licença deste projeto
 
-O código do **FortiClient VPN Manager (DTIC/PRODEPA)** é distribuído sob a
+O código do **FortiClient VPN Manager (DTIC)** é distribuído sob a
 **GNU General Public License v3.0 ou superior** — ver [`LICENSE`](LICENSE).
 
-Copyright (C) 2026 DTIC / PRODEPA.
+Copyright (C) 2026 Jeiel Miranda.
 
-Este é um cliente **alternativo** mantido pela DTIC/PRODEPA. Ele **não**
+Este é um cliente **alternativo** mantido por Jeiel Miranda (DTIC). Ele **não**
 contém código do FortiClient e **não** é endossado pela Fortinet, Inc.
 
 ## strongSwan (motor VPN no Windows)

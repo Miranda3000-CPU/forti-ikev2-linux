@@ -10,4 +10,4 @@ forticlient-vpn (2.1.2) unstable; urgency=medium
   * Página inicial do pacote derivada do remote git, para não apontar para
     um repositório inexistente.
 
- -- DTIC / PRODEPA <jeielmiranda@duck.com>  Mon, 28 Sep 2026 09:00:00 -0300
+ -- Jeiel Miranda <jeielmiranda@duck.com>  Mon, 28 Sep 2026 09:00:00 -0300

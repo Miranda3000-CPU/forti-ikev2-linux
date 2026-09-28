@@ -133,7 +133,7 @@ class VpnApp:
     def __init__(self, root):
         self.root = root
         os_label = "Windows" if IS_WINDOWS else "Linux"
-        self.root.title(f"FortiClient VPN - DTIC / PRODEPA ({os_label})")
+        self.root.title(f"FortiClient VPN - DTIC ({os_label})")
         self.root.geometry("660x800")
         self.root.resizable(False, False)
         self.root.configure(bg="#f1f5f9")
@@ -917,7 +917,7 @@ def run_cli(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="FortiClient VPN Manager (DTIC/PRODEPA)")
+    parser = argparse.ArgumentParser(description="FortiClient VPN Manager (DTIC)")
     parser.add_argument("--connect", action="store_true", help="conecta usando as credenciais salvas")
     parser.add_argument("--disconnect", action="store_true", help="desconecta a VPN")
     parser.add_argument("--diagnose", action="store_true", help="gera pacote de diagnostico e sai")

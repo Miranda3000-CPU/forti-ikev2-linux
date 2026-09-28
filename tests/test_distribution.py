@@ -301,12 +301,29 @@ class TestLicenca(unittest.TestCase):
         self.assertIn("três anos", oferta)
         self.assertIn("§3(b)", oferta)
 
-    def test_release_anexa_o_fonte_do_strongswan(self):
-        """O .exe GPLv2 sem o tarball violates a GPLv2 §2."""
+    def test_windows_experimental_nao_publicado(self):
+        """Windows ainda não é distruibído: a release só leva o .deb."""
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest("PyYAML ausente (instale python3-yaml para checar o workflow)")
+        workflow = yaml.safe_load(read(WORKFLOW))
+        windows = workflow["jobs"]["windows"]
+        self.assertTrue(windows.get("continue-on-error", False), "Windows deve ser experimental")
+        nomes = [str(step.get("name", "")) for step in windows["steps"]]
+        self.assertFalse(
+            any("upload-artifact" in nome or "Publicar" in nome for nome in nomes),
+            "job experimental não pode publicar artefato",
+        )
+        self.assertEqual(workflow["jobs"]["release"]["needs"], ["deb"])
+
+    def test_se_publicar_exe_exige_tarball_do_strongswan(self):
+        """GPLv2 §2: nunca redistança o instalador sem o fonte correspondente."""
         content = read(WORKFLOW)
         self.assertIn("STRONGSWAN_SHA256", content)
-        self.assertIn("strongswan-", content)
-        self.assertIn("GPLv2", content)
+        if "FortiClient-VPN-Setup.exe" in content or "windows-installer" in content:
+            self.assertIn("strongswan-", content,
+                          "reintroduzir o instalador exige voltar com o tarball GPLv2")
 
     def test_tarball_do_strongswan_bate_com_o_anunciado(self):
         """O SHA-256 no NOTICE é a prova de que o fonte é o upstream íntegro."""

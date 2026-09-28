@@ -3,17 +3,17 @@ OFERTA ESCRITA DE FORNECIMENTO DO CÓDIGO-FONTE
 
 (GNU General Public License, versão 2, §3(b))
 
-Esta oferta refere-se ao programa "FortiClient VPN Manager", distribuído pela
-DTIC / PRODEPA, e ao motor strongSwan compilado que acompanha o instalador
+Esta oferta refere-se ao programa "FortiClient VPN Manager", distribuído por
+Jeiel Miranda (DTIC), e ao motor strongSwan compilado que acompanha o instalador
 Windows deste programa.
 
 ────────────────────────────────────────────────────────────────────────────
 1. PROGRAMA COBERTO POR ESTA OFERTA
 ────────────────────────────────────────────────────────────────────────────
 
-FortiClient VPN Manager (DTIC / PRODEPA)
+FortiClient VPN Manager (DTIC)
 Versão: ver https://github.com/Miranda3000-CPU/forti-ikev2-linux/releases (arquivo VERSION)
-Copyright (C) 2026 DTIC / PRODEPA
+Copyright (C) 2026 Jeiel Miranda
 Licença do programa: GNU General Public License v3.0 ou superior
                                       (https://www.gnu.org/licenses/gpl-3.0.html)
 
@@ -39,14 +39,14 @@ Nenhum patch é aplicado ao fonte do strongSwan.
 3. COMPROMISSO
 ────────────────────────────────────────────────────────────────────────────
 
-A DTIC / PRODEPA compromete-se a fornecer o código-fonte completo do programa
+Jeiel Miranda (DTIC) compromete-se a fornecer o código-fonte completo do programa
 e o código-fonte correspondente do strongSwan acima, por qualquer meio, como
 parte de uma oferta de origem, por no mínimo três anos a contar da data da
 primeira distribuição de cada versão.
 
 Pedidos de código-fonte devem ser dirigidos a:
 
-    DTIC / PRODEPA — manutenção do FortiClient VPN Manager
+    Jeiel Miranda (DTIC) — manutenção do FortiClient VPN Manager
     E-mail: jeielmiranda@duck.com
     Endereço: Belém - PA, Brasil
 

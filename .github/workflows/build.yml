@@ -1,11 +1,12 @@
 name: Build e release
 
-# Gera os binários de distribuição (Windows .exe e Linux .deb) e, em tags v*,
-# publica a GitHub Release. O objetivo é que o usuário final baixe o programa
-# pronto, sem compilar nada.
+# Gera o binário de distribuição (Linux .deb) e publica a GitHub Release em
+# tags v*. O instalador Windows (.exe) é apenas EXPERIMENTAL: compila para
+# manutenção/revisão, não é publicado na Release enquanto a estabilidade não
+# for confirmada.
 #
 # Fluxo:
-#   push/PR   -> testes + artefatos (artefatos do Actions expiram em 90 dias;
+#   push/PR   -> testes + .deb (artefatos do Actions expiram em 90 dias;
 #                para distribuir, use a Release de uma tag)
 #   tag v*    -> os mesmos artefatos, publicados como Release
 
@@ -94,11 +95,14 @@ jobs:
           if-no-files-found: error
 
   windows:
-    name: Instalador Windows (.exe)
-    # Em PR só os testes e o .deb: compilar o strongSwan consome ~10 min.
+    name: Instalador Windows (.exe) [experimental]
+    # EXPERIMENTAL: compila para garantir que a cadeia PyInstaller + Inno ainda
+    # funciona, mas NÃO publica nada. Falha aqui não bloqueia o .deb (o
+    # continue-on-error marca o job como "se sucesso", só informativo).
     if: github.event_name != 'pull_request'
     runs-on: windows-latest
     needs: testes
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -147,73 +151,16 @@ jobs:
           & $iscc "build\FortiClient-VPN-Setup.iss"
           if ($LASTEXITCODE -ne 0) { throw "ISCC falhou com código $LASTEXITCODE" }
 
-      # A assinatura tem que vir depois do ISCC: o instalador é reconstruído a
-      # partir do .exe, então assinar antes não produziria um instalador
-      # assinado. O PFX chega como segredo do repositório e é apagado no fim.
-      - name: Assinar os artefatos
-        shell: pwsh
-        env:
-          FCT_SIGN_PFX_BASE64: ${{ secrets.FCT_SIGN_PFX_BASE64 }}
-          FCT_SIGN_PASS: ${{ secrets.FCT_SIGN_PASS }}
-          FCT_TSA_URL: ${{ secrets.FCT_TSA_URL }}
-          FCT_SIGN_SUBJECT: ${{ vars.FCT_SIGN_SUBJECT }}
-          FCT_SIGN_URL: ${{ vars.FCT_SIGN_URL }}
-        run: |
-          $temCert = -not [string]::IsNullOrWhiteSpace($env:FCT_SIGN_PFX_BASE64)
-          $isRelease = $env:GITHUB_REF -like 'refs/tags/v*'
-
-          if ($temCert) {
-            $pfx = "$env:RUNNER_TEMP\forticlient.pfx"
-            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:FCT_SIGN_PFX_BASE64))
-            "FCT_SIGN_PFX=$pfx" >> $env:GITHUB_ENV
-            "FCT_SIGN_REQUIRED=1" >> $env:GITHUB_ENV
-            Write-Host "Certificado carregado; os artefatos serão assinados."
-          } elseif ($isRelease) {
-            # Release pública sem assinatura escapa do aviso do SmartScreen e
-            # alguém sempre clica em "Executar assim mesmo". Melhor falhar.
-            throw "Release sem assinatura: defina o segredo FCT_SIGN_PFX_BASE64 (e FCT_SIGN_PASS)."
-          } else {
-            Write-Host "Sem certificado configurado: build de verificação seguirá sem assinar."
-          }
-
-          bash build/sign_windows.sh
-
-          if ($temCert) {
-            # Sem carimbo de tempo, a assinatura expira com o certificado e o
-            # instalador volta a ser tratado como não assinado.
-            $verif = & signtool verify /pa /v "dist\FortiClient-VPN-Setup.exe" 2>&1 | Out-String
-            if ($verif -notmatch "Valid')") { throw "verificação da assinatura falhou:`n$verif" }
-            Write-Host $verif
-            [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\forticlient.pfx", [byte[]]@())
-            Remove-Item -Force $pfx -ErrorAction SilentlyContinue
-          }
-
-      # O strongSwan é GPLv2 e o instalador embarca seus binários. Sem o fonte
-      # correspondente junto, a redistribuição viola a GPLv2 §2. O tarball é o
-      # upstream íntegro (nenhum patch é aplicado) — só as flags mudam, e elas
-      # estão no repositório.
-      - name: Conferir o tarball do strongSwan (GPLv2)
+      - name: Não publicar (experimental)
         shell: pwsh
         run: |
-          $tarball = "build\cache\strongswan-msys2\strongswan-${{ env.STRONGSWAN_VERSION }}.tar.bz2"
-          if (-not (Test-Path $tarball)) { throw "tarball do strongSwan não encontrado em $tarball" }
-          $hash = (Get-FileHash -Algorithm SHA256 $tarball).Hash.ToLower()
-          if ($hash -ne "${{ env.STRONGSWAN_SHA256 }}") { throw "SHA-256 do tarball divergiu: $hash" }
-          New-Item -ItemType Directory -Force -Path release | Out-Null
-          Copy-Item $tarball release/
-
-      - name: Publicar o instalador
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-installer
-          path: |
-            dist/FortiClient-VPN-Setup.exe
-            release/strongswan-*.tar.bz2
-          if-no-files-found: error
+          Get-ChildItem dist\*\* -ErrorAction SilentlyContinue | Out-Null
+          Write-Host "Build Windows é experimental e não é publicado na Release."
+          Write-Host "O instalador gerado está em dist\, mas nenhum artefato é anexado ao Actions."
 
   release:
     name: Publicar a release
-    needs: [deb, windows]
+    needs: [deb]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -247,21 +194,18 @@ jobs:
         run: |
           version="$(cat VERSION)"
           {
-            echo "Instaladores do FortiClient VPN $version (DTIC / PRODEPA)."
+            echo "FortiClient VPN $version (DTIC) — pacote Linux."
             echo
             echo "| Sistema | Arquivo |"
             echo "| --- | --- |"
-            echo "| Windows (x64) | \`FortiClient-VPN-Setup.exe\` |"
             echo "| Debian / Ubuntu | \`forticlient-vpn_${version}_all.deb\` |"
             echo
-            echo "O instalador do Windows não é assinado digitalmente: o Windows pode"
-            echo "exibir aviso do SmartScreen (*Mais informações → Executar assim mesmo*)."
+            echo "Instale com: \`sudo apt install ./forticlient-vpn_${version}_all.deb\`"
             echo
-            echo "O \`strongswan-*.tar.bz2\` é o código-fonte do motor strongSwan (GPLv2)"
-            echo "embarcado no instalador, publicado para cumprir a GPLv2. Ver \`NOTICE\` e"
-            echo "\`SOURCE-OFFER.txt\`."
+            echo "**Windows: experimental.** O instalador ainda não é distribuído"
+            echo "oficialmente. Para testar, compile: \`./build/preparar_instalador_windows.sh\`."
             echo
-            echo "Verifique os arquivos com \`SHA256SUMS\`."
+            echo "Verifique o arquivo com \`SHA256SUMS\`."
           } > notas.md
           gh release create "$GITHUB_REF_NAME" release/* \
             --title "FortiClient VPN $version" \

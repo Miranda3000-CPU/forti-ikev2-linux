@@ -1,4 +1,4 @@
-; Instalador Windows do FortiClient VPN Manager (DTIC/PRODEPA).
+; Instalador Windows do FortiClient VPN Manager (DTIC).
 ;
 ; Gera: dist\FortiClient-VPN-Setup.exe
 ; Compilar (no Linux, via Wine):
@@ -8,9 +8,9 @@
 ; permite IKEv2 + PSK + EAP-MSCHAPv2 sem depender do FortiClient.
 
 [Setup]
-AppName=FortiClient VPN - DTIC/PRODEPA
+AppName=FortiClient VPN - DTIC
 AppVersion=2.1.2
-AppPublisher=DTIC / PRODEPA
+AppPublisher=Jeiel Miranda (DTIC)
 DefaultDirName={autopf}\FortiClient-VPN
 DefaultGroupName=FortiClient VPN
 UninstallDisplayIcon={app}\FortiClient-VPN.exe

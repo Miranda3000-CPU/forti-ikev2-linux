@@ -1,4 +1,4 @@
-# 🛡️ FortiClient VPN - DTIC / PRODEPA
+# 🛡️ FortiClient VPN - DTIC
 
 Interface gráfica para conexão VPN IKEv2 (FortiGate) com autenticação
 **EAP-MSCHAPv2 + PSK**. Não depende do FortiClient: o motor é o
@@ -6,16 +6,18 @@ Interface gráfica para conexão VPN IKEv2 (FortiGate) com autenticação
 
 ## Instalação
 
-**Você não precisa compilar nada.** Baixe o instalador pronto da
+**Você não precisa compilar nada (Linux).** Baixe o pacote pronto da
 [**última release**](https://github.com/Miranda3000-CPU/forti-ikev2-linux/releases/latest):
 
-| Sistema           | Arquivo                             | Como instalar                                              |
-| ----------------- | ----------------------------------- | ---------------------------------------------------------- |
-| Windows 10/11 x64 | `FortiClient-VPN-Setup.exe`         | Execute e aceite o UAC                                     |
-| Debian / Ubuntu   | `forticlient-vpn_<versão>_all.deb` | `sudo apt install ./forticlient-vpn_<versão>_all.deb`      |
+| Sistema         | Arquivo                             | Como instalar                                         |
+| --------------- | ----------------------------------- | ----------------------------------------------------- |
+| Debian / Ubuntu | `forticlient-vpn_<versão>_all.deb` | `sudo apt install ./forticlient-vpn_<versão>_all.deb` |
 
-Cada release traz também `SHA256SUMS` (para conferir a integridade) e o tarball
-do strongSwan, exigido pela GPLv2 — ver [Licença](#licença).
+Cada release traz também `SHA256SUMS` (para conferir a integridade).
+
+> **Windows: experimental.** O instalador `FortiClient-VPN-Setup.exe` está em
+> desenvolvimento e **ainda não é distribuído** nas releases até a estabilidade
+> ser confirmada. Para testar, compile a partir do código-fonte (veja abaixo).
 
 <details>
 <summary>Instalar a partir do código-fonte</summary>
@@ -114,9 +116,10 @@ python3 build/gen_build_info.py
 FCT_WEB_URL='https://seu-fortigate:10443/login?redir=%2F' python3 build/gen_build_info.py
 ```
 
-O **GitHub Actions** faz tudo sozinho: compila o motor com MSYS2, roda os
-testes, gera o `.exe` e o `.deb`, e ao criar uma tag `v<versão>` publica os dois
-como **Release** (junto do tarball do strongSwan, exigido pela GPLv2).
+O **GitHub Actions** faz tudo sozinho: roda os testes, gera o `.deb` e, ao criar
+uma tag `v<versão>`, publica como **Release**. O instalador Windows é compilado
+no CI apenas como **verificação experimental** (não falha o build, não é
+publicado).
 
 Passos manuais do Windows (só se quiser controle fino):
 ```bash
@@ -149,7 +152,7 @@ O que é preciso ter:
 
 1. **Certificado de assinatura de código** (X.509 com a EKU
    `1.3.6.1.5.5.7.3.3`). Opções:
-   - **CA interna da DTIC/PRODEPA** — gratuita, e o resultado é um instalador
+   - **CA interna da DTIC** — gratuita, e o resultado é um instalador
      sem aviso **nas máquinas do domínio**, desde que a raiz seja publicada
      por GPO em *Autoridades de Certificação Raiz Confiáveis* e
      *Editores Confiáveis*. É a via indicada para uso interno no governo.
@@ -177,10 +180,13 @@ SDK, e roda depois do Inno Setup, nunca antes.
 
 **Os binários do strongSwan em `vendor/windows/` não são assinados.** São
 terceiros (GPLv2) e selar com o certificado da DTIC deturparia a
-procedência. O `SOURCE-OFFER` e o tarball correspondente viajam na release.
+procedência. Enquanto o instalador não for distribuído nas releases, o fonte
+do strongSwan é fornecido sob demanda conforme o `SOURCE-OFFER.txt`; quando a
+distribuição começar, o tarball correspondente acompanha a release.
 
-No CI, um build de tag **falha** se não houver certificado configurado, para
-não publicar release não assinada por engano.
+No CI, o job do Windows é experimental (`continue-on-error`) e **não** é
+publicado. A exigência de assinatura para release volta a valer quando o
+instalador passar a ser distribuído.
 
 Expectativa realista: mesmo com certificado novo, o SmartScreen pode avisar
 por um tempo, porque a reputação se constrói com volume de downloads.
@@ -313,7 +319,7 @@ do índice não basta: é preciso reescrever o histórico (`git filter-repo`) e
 ## Licença
 
 Este projeto é distribuído sob a **GNU GPLv3 ou superior** — ver
-[`LICENSE`](LICENSE). Copyright (C) 2026 DTIC / PRODEPA.
+[`LICENSE`](LICENSE). Copyright (C) 2026 Jeiel Miranda.
 
 O instalador do Windows distribui o motor **strongSwan** (GPLv2) como programa
 separado; cada release publica o tarball do fonte correspondente para cumprir a

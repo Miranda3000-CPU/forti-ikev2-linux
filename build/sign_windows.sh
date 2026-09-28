@@ -26,7 +26,7 @@ INSTALLER_EXE="dist/FortiClient-VPN-Setup.exe"
 # Timestamp RFC 3161 é obrigatório: sem ele a assinatura morre junto com o
 # certificado e o instalador volta a aparecer como não assinado.
 TSA_URL="${FCT_TSA_URL:-http://timestamp.digicert.com}"
-SUBJECT="${FCT_SIGN_SUBJECT:-FortiClient VPN - DTIC/PRODEPA}"
+SUBJECT="${FCT_SIGN_SUBJECT:-FortiClient VPN - DTIC}"
 SUBJECT_URL="${FCT_SIGN_URL:-https://github.com/Miranda3000-CPU/forti-ikev2-linux}"
 
 log()  { printf '\033[1;32m[sign]\033[0m %s\n' "$*"; }

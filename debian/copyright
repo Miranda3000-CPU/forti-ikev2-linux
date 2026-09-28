@@ -3,7 +3,7 @@ Upstream-Name: forticlient-vpn
 Source: https://github.com/Miranda3000-CPU/forti-ikev2-linux
 
 Files: *
-Copyright: 2026 DTIC / PRODEPA
+Copyright: 2026 Jeiel Miranda
 License: GPL-3.0-or-later
 
 Files: vendor/windows/*
