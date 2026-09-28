@@ -20,6 +20,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from collections import namedtuple
 
@@ -75,7 +76,10 @@ def build_swanctl_conf(gw, local_ip="", user="", pwd="", psk="", include_local_a
         "        encap        = yes\n"
         "        mobike       = no\n"
         "        dpd_delay    = 5s\n"
-        "        keyingtries  = 0\n"
+        # 3 = padrao do strongSwan. Com 0 (infinito) uma falha de IKE_AUTH
+        # nunca encerra a SA: ela retransmite para sempre e o --initiate só
+        # volta no timeout do app (90s), sem nunca expor o notify do motivo.
+        "        keyingtries  = 3\n"
         "        rekey_time   = 86400s\n"
         "\n"
         "        vips = 0.0.0.0\n"
@@ -125,11 +129,17 @@ def build_swanctl_conf(gw, local_ip="", user="", pwd="", psk="", include_local_a
     }
 
 
-def build_strongswan_conf(log_name="charonlog"):
+def build_strongswan_conf(log_name="charonlog", log_path=None):
     """
     strongswan.conf usado pelo `charon-svc` (serviço) e pelo `swanctl.exe`.
 
     Log em arquivo: o serviço não tem console.
+
+    `path` é obrigatório. Um bloco `filelog` sem ele não escreve nada — o
+    daemon não tem para onde enviar, e o log some. Foi exatamente o que
+    aconteceu em campo: 163 KB de app.log e zero linha de erro, porque o
+    único lugar com o motivo da falha (AUTHENTICATION_FAILED,
+    NO_PROPOSAL_CHOSEN, ID_MISMATCH) é o log do charon.
 
     Sem `start-scripts`: o serviço roda como SYSTEM na pasta do motor e não
     enxerga o nosso diretório de configuração. Quem carrega conexões/segredos é
@@ -139,15 +149,24 @@ def build_strongswan_conf(log_name="charonlog"):
     parser do strongSwan rejeita as duas formas ("syntax error").
     """
     log_target = (log_name or "charonlog").replace("\\", "/").replace('"', "").replace(".", "_")
+    # Barras normais: o parser do strongSwan não processa escape, e o Windows
+    # aceita "/" em qualquer caminho.
+    target = (log_path or "").replace("\\", "/").replace('"', "")
+    path_line = "      path = %s\n" % target if target else ""
+    # Sem comentário neste arquivo: ele é reescrito a cada conexão e só o
+    # daemon vai lê-lo. A justificativa de cada campo fica no docstring.
     return (
         "charon-svc {\n"
+        "  loglevel = 2\n"
         "  filelog {\n"
-        "    %s {\n"
+        "    %(log_target)s {\n"
+        "%(path_line)s"
         "      flush_line = yes\n"
+        "      ike_name = yes\n"
         "    }\n"
         "  }\n"
         "}\n"
-    ) % log_target
+    ) % {"log_target": log_target, "path_line": path_line}
 
 
 # ═══════════════════════════════════════════════════════════ parsing/erros
@@ -345,6 +364,41 @@ def windows_strongswan_conf_file():
     return os.path.join(windows_swanctl_dir(), "strongswan.conf")
 
 
+# ─────────────────────────────────────────────── log do daemon (charon)
+
+def windows_charon_log_dir():
+    """
+    Diretório machine-wide do log do charon.
+
+    Fica em ProgramData (e não na pasta do motor) por dois motivos: o
+    charon-svc roda como SYSTEM, que não enxerga o perfil do usuário, e o
+    aplicativo precisa LER esse arquivo para anexá-lo ao diagnóstico — em
+    Program Files o usuário só tem leitura, o que também serviria, mas ali o
+    log se mistura com os binários e o desinstalador teria de limpá-lo.
+    """
+    base = os.environ.get("ProgramData") or "C:\\ProgramData"
+    return os.path.join(base, "FortiClientVPN")
+
+
+def windows_charon_log_file():
+    return os.path.join(windows_charon_log_dir(), "charon.log")
+
+
+def windows_engine_strongswan_conf_file():
+    """
+    O strongswan.conf que o DAEMON lê: o que está ao lado do charon-svc.exe.
+
+    Diferente do arquivo do usuário (windows_strongswan_conf_file), que serve
+    ao swanctl. O serviço é criado sem argumentos, então o strongSwan resolve a
+    configuração a partir do diretório do executável — e só a lê no arranque.
+    Sem reescrever este arquivo, mexer no do usuário não muda o log do daemon.
+    """
+    charon = charon_svc_path()
+    if not charon:
+        return None
+    return os.path.join(os.path.dirname(charon), "strongswan.conf")
+
+
 # ═══════════════════════════════════════════════════════════ runner
 
 class Result:
@@ -370,8 +424,86 @@ class Result:
         return "Result(rc=%r, elevated=%r, out=%r)" % (self.returncode, self.elevated, self.output[:120])
 
 
+def _read_log_tail(path, lines=200, max_bytes=512_000):
+    """
+    Últimas `lines` linhas de um log, para anexar ao pacote de diagnóstico.
+
+    Lê no máximo `max_bytes` do FIM do arquivo: o charon.log cresce sem
+    rotação e o pacote não pode virar um disco. A linha em que o corte cai é
+    descartada, senão ela aparece truncada e confunde quem lê.
+    """
+    if not path or not os.path.isfile(path):
+        return "(log inexistente: %s)" % (path or "caminho vazio")
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as handle:
+            if size > max_bytes:
+                handle.seek(size - max_bytes)
+                handle.readline()
+            raw = handle.read()
+    except OSError as exc:
+        return "(nao foi possivel ler: %s)" % exc
+
+    text = raw.decode("utf-8", errors="replace")
+    todas = text.splitlines()
+    if not todas:
+        return "(vazio)"
+    if len(todas) <= lines:
+        return "\n".join(todas)
+    return "(... %d linhas anteriores omitidas ...)\n%s" % (
+        len(todas) - lines,
+        "\n".join(todas[-lines:]),
+    )
+
+
 def _ps_quote(value):
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def _write_elevated(path, text):
+    """
+    Grava `text` em `path`; se não houver permissão, tenta com UAC.
+
+    O conteúdo vai por um arquivo temporário porque o comando elevado precisa
+    de um argumento só — passar o texto multilinha inline exigiria escaping e
+    qualquer aspas quebraria a gravação.
+
+    Devolve True só se o arquivo estiver no disco com o conteúdo desejado.
+    """
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        return True
+    except OSError:
+        pass
+
+    if not IS_WINDOWS:
+        return False
+
+    staged = tempfile.NamedTemporaryFile(
+        "w", suffix=".conf", delete=False, encoding="utf-8", errors="replace"
+    )
+    try:
+        staged.write(text)
+        staged.close()
+        result = default_runner(
+            [
+                "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                "$ErrorActionPreference='Stop'; "
+                "Copy-Item -LiteralPath %s -Destination %s -Force"
+                % (_ps_quote(staged.name), _ps_quote(path)),
+            ],
+            timeout=90,
+            elevate=True,
+        )
+        return result.ok
+    except OSError:
+        return False
+    finally:
+        try:
+            os.unlink(staged.name)
+        except OSError:
+            pass
 
 
 def _run_elevated_windows(argv, timeout=None):
@@ -608,6 +740,12 @@ class VpnEngine:
             return Status(False, None, "", detail)
 
         problems = []
+        # A ordem importa: o strongswan.conf do daemon só é lido no arranque do
+        # serviço, então ele precisa estar no disco ANTES de subirmos o serviço.
+        # Sem este sync, um strongswan.conf sem `path` (instalação antiga) deixa
+        # o daemon sem log nenhum.
+        if self._sync_engine_strongswan_conf():
+            problems.append("strongswan.conf do motor estava sem log e o servico foi reiniciado")
         if not self._ensure_windows_service():
             problems.append("servico charon-svc nao pode ser iniciado")
         if not self._ensure_ikext_stopped():
@@ -638,12 +776,30 @@ class VpnEngine:
 
         try:
             with open(windows_strongswan_conf_file(), "w", encoding="utf-8") as handle:
-                handle.write(build_strongswan_conf())
+                handle.write(build_strongswan_conf(log_path=windows_charon_log_file()))
         except OSError as exc:
             return Status(False, None, "", "falha ao gravar strongswan.conf: %s" % exc)
 
         swanctl = swanctl_path(self.platform)
         self._log("Diretorio de configuracao do swanctl: %s" % windows_swanctl_dir())
+
+        # Derruba SAs penduradas de tentativas anteriores ANTES de iniciar.
+        # Com keyingtries finito elas se encerram sozinhas, mas uma tentativa
+        # interrompida no meio (timeout do app, fechar a janela) deixa meia SA
+        # viva: em campo foram observadas duas simultâneas, uma delas com o IP
+        # local obsoleto. Elas somam retransmisses, competem pelas portas 500/4500
+        # e fazem o --list-sas do diagnóstico ficar ambíguo.
+        stale = self._call(
+            [swanctl, "--terminate", "--ike", CHILD_NAME],
+            timeout=30,
+            env=self._win_env(),
+            cwd=self._win_workdir(),
+        )
+        if stale.ok:
+            self._log("Encerrada SA pendurada de tentativa anterior.")
+        else:
+            self._log("Nao ha SA pendurada a encerrar (%s)." % (stale.output or "sem resposta"))
+
         load = self._call(
             [swanctl, "--load-all"], timeout=60, env=self._win_env(), cwd=self._win_workdir()
         )
@@ -675,7 +831,15 @@ class VpnEngine:
         error = map_engine_error(proc.output)
         if problems:
             error = error + " | " + "; ".join(problems)
+        # Aponta o log do daemon. O stdout do swanctl nem sempre traz o notify
+        # do servidor, e sem essa pista o usuário só tinha "timeout" para
+        # investigate — o motivo real estava no charon.log, que ele não sabia
+        # que existia.
+        charon_log = windows_charon_log_file()
+        if os.path.isfile(charon_log):
+            error += " | Log do motor (motivo real): %s" % charon_log
         return Status(False, None, proc.output, error)
+
 
     # --------------------------------------------------------- desconectar
     def disconnect(self):
@@ -700,6 +864,50 @@ class VpnEngine:
     # -------------------------------------------------- Windows: serviço
     def _sc_query(self, service):
         return self._call(["sc", "query", service], timeout=20)
+
+    def _sync_engine_strongswan_conf(self):
+        """
+        Garante que o strongswan.conf do DAEMON tenha `path` no filelog.
+
+        O charon-svc é registrado sem argumentos, então lê a configuração de
+        onde está o executável — e apenas no arranque. Duas consequências:
+
+        1. installations antigas têm ali o conf sem `path` (o log nunca foi
+           escrito). Reescrevemos com o path correto.
+        2.reescrever não basta: o serviço precisa reiniciar para reler.
+
+        Devolve True se o arquivo mudou (ou seja, se o serviço deve reiniciar).
+        """
+        target = windows_engine_strongswan_conf_file()
+        if not target:
+            return False
+
+        desired = build_strongswan_conf(log_path=windows_charon_log_file())
+        try:
+            with open(target, "r", encoding="utf-8", errors="replace") as handle:
+                current = handle.read()
+        except OSError:
+            current = ""
+
+        if current.strip() == desired.strip():
+            return False
+
+        self._log("strongswan.conf do motor sem log utilizavel; regravando com path.")
+        if IS_WINDOWS:
+            # Fora do Windows `windows_charon_log_dir()` resolve para um caminho
+            # relativo sem sentido; criar isso sujaria o diretório de trabalho.
+            ensure_dir(windows_charon_log_dir())
+        if not _write_elevated(target, desired):
+            # Sem permissão de escrita o daemon segue com a config antiga: ainda
+            # funciona, mas continua sem log. Só um aviso, não um erro fatal.
+            self._log("Nao foi possivel gravar %s (sem elevacao); o log do motor pode ficar indisponivel." % target)
+            return False
+
+        if "RUNNING" in self._sc_query(WIN_SERVICE_NAME).output.upper():
+            self._log("Reiniciando '%s' para o motor reler a configuracao de log." % WIN_SERVICE_NAME)
+            self._call(["sc", "stop", WIN_SERVICE_NAME], timeout=120, elevate=True)
+            time.sleep(2)
+        return True
 
     def _ensure_windows_service(self):
         query = self._sc_query(WIN_SERVICE_NAME)
@@ -945,6 +1153,8 @@ class VpnEngine:
                 for name in files:
                     listing.append(os.path.join(root, name))
             info["arquivos de configuracao"] = "\n".join(listing) or "(nenhum)"
+            info["log do charon (caminho)"] = windows_charon_log_file()
+            info["log do charon (ultimas linhas)"] = _read_log_tail(windows_charon_log_file())
             for path in (windows_swanctl_conf_file(), windows_strongswan_conf_file()):
                 try:
                     with open(path, "r", encoding="utf-8", errors="replace") as handle:

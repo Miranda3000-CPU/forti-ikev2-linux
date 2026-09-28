@@ -1,5 +1,5 @@
 Package: forticlient-vpn
-Version: 1.0.0
+Version: 2.1.2
 Section: net
 Priority: optional
 Architecture: all
@@ -9,4 +9,4 @@ Description: FortiClient VPN - Interface Gráfica para VPN FortiGate IKEv2
  Interface gráfica simplificada para conexão VPN IKEv2 com
  FortiGate usando strongSwan. Compatível com autenticação
  EAP-MSCHAPv2 + PSK.
-Homepage: https://github.com/Miranda/fortclient-GUI
+Homepage: https://github.com/Miranda3000-CPU/forti-ikev2-linux

@@ -1,40 +1,66 @@
 # Avisos de licença e componentes de terceiros
 
+## Licença deste projeto
+
+O código do **FortiClient VPN Manager (DTIC/PRODEPA)** é distribuído sob a
+**GNU General Public License v3.0 ou superior** — ver [`LICENSE`](LICENSE).
+
+Copyright (C) 2026 DTIC / PRODEPA.
+
+Este é um cliente **alternativo** mantido pela DTIC/PRODEPA. Ele **não**
+contém código do FortiClient e **não** é endossado pela Fortinet, Inc.
+
 ## strongSwan (motor VPN no Windows)
 
-O pacote Windows do FortiClient VPN Manager **não inclui o FortiClient**. Ele
-inclui o motor **strongSwan** compilado para Windows
+O pacote Windows **não inclui o FortiClient**. Ele distribui, como programa
+separado, o motor **strongSwan** compilado para Windows
 (`vendor/windows/charon-svc.exe`, `vendor/windows/swanctl.exe`), que implementa
 IKEv2 com autenticação por PSK e EAP-MSCHAPv2.
 
-- Projeto: https://www.strongswan.org/
-- Código-fonte: https://github.com/strongswan/strongswan
-- Licença: **GNU General Public License v2.0 (GPLv2)**
+- Projeto: <https://www.strongswan.org/>
+- Código-fonte: <https://github.com/strongswan/strongswan>
+- Licença: **GNU General Public License v2.0 (GPLv2)** — *independente* da
+  GPLv3 deste projeto. Os binários são um programa separado, executado como
+  processo independente; não há código do strongSwan incorporado neste código.
 
-Ao redistribuir o instalador, a GPLv2 exige a oferta do código-fonte
-correspondente (incluindo eventuais modificações):
+### Correspondência de fonte (GPLv2 §2 e §3)
 
-1. publique o tarball usado na compilação (`STRONGSWAN_VERSION`, ver
-   `build/build_strongswan_windows.sh`), ou
-2. inclua uma oferta escrita válida (GPLv2 §3) de fornecimento do fonte por, no
-   mínimo, três anos.
+O `vendor/windows` **não é versionado neste repositório**: os binários são
+compilados do fonte upstream sem **nenhuma modificação**, apenas com as opções
+de `./configure` registradas em `build/build_strongswan_windows.sh` e
+`build/build_strongswan_windows_msys2.sh`. Portanto o fonte correspondente é:
 
-O OpenSSL embutido é distribuído sob a licença Apache 2.0
-(https://www.openssl.org/source/license.html).
+| Item                    | Valor                                                       |
+| ----------------------- | ----------------------------------------------------------- |
+| Versão                  | `6.1.0` (ver `STRONGSWAN_VERSION` nos scripts de build)       |
+| Tarball                 | `strongswan-6.1.0.tar.bz2`                                   |
+| SHA-256                 | `fe6c97481298767213cfc2e9a1da29fdd8018d481ff4cb9cf0283099654f20d4` |
+| URL                     | <https://download.strongswan.org/strongswan-6.1.0.tar.bz2>  |
+| Modificações            | nenhuma (apenas flags de `./configure`)                     |
+| Scripts de build        | `build/build_strongswan_windows{,_msys2}.sh`                 |
+
+Para satisfazer a GPLv2, **cada release do instalador Windows publica o tarball
+do strongSwan como artefato junto do `.exe`**, além de
+[`SOURCE-OFFER.txt`](SOURCE-OFFER.txt), que constitui a oferta escrita de
+fornecimento do fonte exigida pelo §3(b) da GPLv2 (válida por três anos).
+
+O OpenSSL é distribuído sob a licença Apache 2.0
+(<https://www.openssl.org/source/license.html>).
 
 No **Linux**, o strongSwan é instalado como dependência do sistema
-(`strongswan`, `strongswan-swanctl`) e a GPLv2 já é satisfeita pela distribuição.
+(`strongswan`, `strongswan-swanctl`) e a GPLv2 já é satisfeita pela distribuição
+do sistema operacional.
 
 ## Demais dependências
 
-| Componente | Uso                          | Licença          |
-| ---------- | ---------------------------- | ---------------- |
-| Pillow     | ícones da interface          | MIT-CMU          |
-| PyInstaller| empacotamento do `.exe`      | GPLv2 + exceção  |
-| Inno Setup | instalador Windows           | livre (ver site) |
+| Componente  | Uso                     | Licença          |
+| ----------- | ----------------------- | ---------------- |
+| Pillow      | ícones da interface     | MIT-CMU          |
+| PyInstaller | empacotamento do `.exe` | GPLv2 + exceção  |
+| Inno Setup | instalador Windows      | livre (ver site) |
+| Tk          | interface gráfica       | BSD-like (Tcl)   |
 
 ## Marcas
 
-"Fortinet", "FortiGate" e "FortiClient" são marcas da Fortinet, Inc. Este
-projeto é um cliente alternativo mantido pela DTIC/PRODEPA e **não** é
-endossado pela Fortinet.
+"Fortinet", "FortiGate" e "FortiClient" são marcas da Fortinet, Inc. O uso deste
+projeto é **independente** e **não** é endossado pela Fortinet.

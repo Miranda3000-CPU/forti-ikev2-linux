@@ -27,7 +27,12 @@ from vpn_engine import VpnEngine, Status
 IS_WINDOWS = sys.platform == "win32"
 IS_LINUX = sys.platform.startswith("linux")
 
-WEB_URL = "https://10.64.10.1:6464/login?redir=%2F"
+try:
+    import build_info as _build_info
+
+    DEFAULT_WEB_URL = getattr(_build_info, "WEB_URL", "") or ""
+except Exception:
+    DEFAULT_WEB_URL = ""
 
 try:
     from PIL import Image, ImageDraw
@@ -733,21 +738,33 @@ class VpnApp:
         threading.Thread(target=run, daemon=True).start()
 
     # ─────────────────────────────────────────────────── ferramentas
+    def _web_url(self):
+        """URL do Painel FortiOS embutida no build (via FCT_WEB_URL), se houver."""
+        return DEFAULT_WEB_URL
+
     def open_web_panel(self):
-        self.log(f"Abrindo navegador padrão em: {WEB_URL}")
+        url = self._web_url()
+        if not url:
+            self.log("Painel Web não configurado neste build. Nenhum endereço interno é embutido no app.")
+            return
+        self.log(f"Abrindo navegador padrão em: {url}")
         self.root.clipboard_clear()
-        self.root.clipboard_append(WEB_URL)
-        webbrowser.open(WEB_URL)
+        self.root.clipboard_append(url)
+        webbrowser.open(url)
 
     def on_test_web(self):
-        self.log(f"Testando acesso ao Painel Web FortiOS ({WEB_URL})...")
+        url = self._web_url()
+        if not url:
+            self.log("Painel Web não configurado neste build. O atalho fica disponível ao compilar com FCT_WEB_URL.")
+            return
+        self.log(f"Testando acesso ao Painel Web FortiOS ({url})...")
 
         def run():
             try:
                 context = ssl.create_default_context()
                 context.check_hostname = False
                 context.verify_mode = ssl.CERT_NONE
-                request = urllib.request.Request(WEB_URL, headers={"User-Agent": "Mozilla/5.0"})
+                request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
                 code = None
                 try:
                     with urllib.request.urlopen(request, timeout=5, context=context) as response:

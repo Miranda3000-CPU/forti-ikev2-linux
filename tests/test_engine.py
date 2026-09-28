@@ -16,7 +16,7 @@ from vpn_engine import (  # noqa: E402
 )
 
 ESTABLISHED = """forticlient: #1, ESTABLISHED, IKEv2, 48c04cfd85452589_i 4b22838eac3b49e7_r*
-  local  'miranda' @ 203.0.113.7[4500]
+  local  'usuario' @ 203.0.113.7[4500]
   remote '%any' @ 198.51.100.100[4500] [10.10.20.5]
   AES_CBC-256/HMAC_SHA2_256_128/PRF_HMAC_SHA2_256/MODP_2048
   forticlient: #1, reqid 1, INSTALLED, TUNNEL-in-UDP, ESP:AES_CBC-256/HMAC_SHA1_96
@@ -71,7 +71,7 @@ class FakeRunner:
 
 class TestSwanctlConf(unittest.TestCase):
     def test_includes_core_parameters(self):
-        conf = build_swanctl_conf("198.51.100.100", "203.0.113.7", "miranda", "senha", "psk")
+        conf = build_swanctl_conf("198.51.100.100", "203.0.113.7", "usuario", "senha", "psk")
         for token in [
             "remote_addrs = 198.51.100.100",
             "local_addrs  = 203.0.113.7",
@@ -177,7 +177,7 @@ class TestLinuxEngine(unittest.TestCase):
                              "swanctl --list-sas": (0, ESTABLISHED, "")})
         engine = VpnEngine(platform="linux", runner=runner)
         status = engine.connect({"gateway": "198.51.100.100", "local_ip": "203.0.113.7",
-                                 "user": "miranda", "password": "senha", "psk": "psk"})
+                                 "user": "usuario", "password": "senha", "psk": "psk"})
         self.assertTrue(status.connected, status)
         self.assertEqual(status.vip, "10.10.20.5")
 
@@ -254,7 +254,7 @@ class TestWindowsEngine(unittest.TestCase):
             {
                 "gateway": "198.51.100.100",
                 "local_ip": "192.168.0.5",
-                "user": "miranda",
+                "user": "usuario",
                 "password": "senha",
                 "psk": "psk",
                 "vip_strategy": "none",
@@ -285,6 +285,186 @@ class TestWindowsEngine(unittest.TestCase):
         self.assertFalse(status.connected)
         self.assertIn("nao encontrado", status.error)
 
+    # ------------------------------------------- correcoes de 2026-09-28
+    #
+    # Campo: dois SAs meio-abertos simultaneos e um diagnostico de 163 KB sem
+    # uma unica linha de erro. As tres causas eram independentes entre si.
+
+    def test_terminate_stale_sa_before_load_all(self):
+        """
+        Regressao: SA pendurada de tentativa anterior nao pode sobreviver a um
+        novo --initiate.
+
+        Com keyingtries infinito ela nunca se encerrava, e uma tentativa
+        interrompida no meio deixava meia SA viva: em campo foram observadas
+        duas ao mesmo tempo, uma delas com o IP local obsoleto. Alem de somar
+        retransmisses, faz o --list-sas do diagnostico ficar ambiguo.
+        """
+        runner = self._runner()
+        engine = VpnEngine(platform="windows", runner=runner)
+        engine.connect(
+            {"gateway": "198.51.100.100", "local_ip": "192.168.0.5", "user": "u",
+             "password": "p", "psk": "k", "vip_strategy": "none"}
+        )
+        commands = runner.commands()
+        terminate = [i for i, c in enumerate(commands) if "--terminate --ike forticlient" in c]
+        load = [i for i, c in enumerate(commands) if "--load-all" in c]
+        initiate = [i for i, c in enumerate(commands) if "--initiate" in c]
+        self.assertTrue(terminate, "nenhuma SA pendurada foi encerrada: %s" % commands)
+        self.assertTrue(load and initiate)
+        self.assertLess(terminate[0], load[0], "o terminate tem que vir ANTES do load-all")
+        self.assertLess(terminate[0], initiate[0], "o terminate tem que vir ANTES do initiate")
+
+    def test_keyingtries_is_finite(self):
+        """
+        Regressao: `keyingtries = 0` (infinito) faz a SA retransmitir para
+        sempre, e o --initiate so volta no timeout de 90s do app, sem nunca
+        expor o notify com o motivo. Com 3, o daemon desiste e o erro volta.
+        """
+        conf = build_swanctl_conf("198.51.100.100", "203.0.113.7", "u", "p", "k")
+        line = [ln for ln in conf.splitlines() if "keyingtries" in ln]
+        self.assertTrue(line, "keyingtries ausente")
+        self.assertNotIn("= 0", line[0], "keyingtries infinito nunca encerra a SA: %r" % line[0])
+        self.assertIn("= 3", line[0])
+
+    def test_strongswan_conf_has_filelog_path(self):
+        """
+        Regressao: bloco `filelog` sem `path` nao escreve log nenhum.
+
+        Era a causa de o diagnostico vir sem uma linha de erro: o unico lugar
+        com o motivo da falha (AUTHENTICATION_FAILED, NO_PROPOSAL_CHOSEN,
+        ID_MISMATCH) e o log do charon, e ele estava indo para o vazio.
+        """
+        conf = build_strongswan_conf(log_path=r"C:\ProgramData\FortiClientVPN\charon.log")
+        self.assertIn("path = ", conf)
+        self.assertIn("FortiClientVPN/charon.log", conf)
+        # Barras normais: o parser do strongSwan nao processa escape.
+        self.assertNotIn("\\", conf)
+
+    def test_shipped_engine_conf_declares_path(self):
+        """
+        O conf instalado em vendor/windows/ e o que o DAEMON le. Sem `path`
+        ali, uma instalacao nova tambem nasce sem log.
+        """
+        path = os.path.join(BASE_DIR, "build", "strongswan-windows.conf")
+        with open(path, encoding="utf-8") as handle:
+            effective = "\n".join(
+                ln for ln in handle.read().splitlines() if not ln.strip().startswith("#")
+            )
+        self.assertIn("path = ", effective, "conf do motor sem destino de log")
+        self.assertIn("charon.log", effective)
+
+    def test_engine_conf_without_path_is_rewritten_and_service_restarted(self):
+        """
+        O charon-svc le a configuracao do diretorio do executavel e SO no
+        arranque. Entao gravar o conf nao basta: sem reiniciar o servico, um
+        conf antigo sem `path` continua valendo e o log continua mudo.
+        """
+        engine_conf = os.path.join(self.engine_dir, "strongswan.conf")
+        with open(engine_conf, "w", encoding="utf-8") as handle:
+            handle.write("charon-svc {\n  filelog {\n    charonlog {\n      flush_line = yes\n")
+
+        runner = self._runner()
+        engine = VpnEngine(platform="windows", runner=runner)
+        engine.connect(
+            {"gateway": "198.51.100.100", "local_ip": "192.168.0.5", "user": "u",
+             "password": "p", "psk": "k", "vip_strategy": "none"}
+        )
+
+        with open(engine_conf, encoding="utf-8") as handle:
+            rewritten = handle.read()
+        self.assertIn("path = ", rewritten)
+        self.assertTrue(
+            any("sc stop strongSwan IKE service" in c for c in runner.commands()),
+            "servico nao foi reiniciado para reler o conf: %s" % runner.commands(),
+        )
+
+    def test_engine_conf_up_to_date_does_not_restart_service(self):
+        """Conf ja correto nao deve custar um restart de servico por conexao."""
+        import vpn_engine
+
+        with open(os.path.join(self.engine_dir, "strongswan.conf"), "w", encoding="utf-8") as handle:
+            handle.write(vpn_engine.build_strongswan_conf(log_path=vpn_engine.windows_charon_log_file()))
+
+        runner = self._runner()
+        engine = VpnEngine(platform="windows", runner=runner)
+        engine.connect(
+            {"gateway": "198.51.100.100", "local_ip": "192.168.0.5", "user": "u",
+             "password": "p", "psk": "k", "vip_strategy": "none"}
+        )
+        self.assertFalse(
+            any("sc stop strongSwan IKE service" in c for c in runner.commands()),
+            "restart desnecessario: %s" % runner.commands(),
+        )
+
+    def test_read_log_tail_handles_missing_and_truncates(self):
+        from vpn_engine import _read_log_tail
+
+        self.assertIn("inexistente", _read_log_tail(os.path.join(self.tmp, "nao-existe.log")))
+
+        alvo = os.path.join(self.tmp, "charon.log")
+        with open(alvo, "w", encoding="utf-8") as handle:
+            handle.write("\n".join("linha %d" % i for i in range(500)))
+        tail = _read_log_tail(alvo, lines=10)
+        self.assertIn("linha 499", tail)
+        self.assertNotIn("linha 0", tail)
+        self.assertIn("omitidas", tail)
+
+    def test_read_log_tail_respects_byte_cap(self):
+        """O charon.log cresce sem rotacao: o pacote nao pode virar um disco."""
+        from vpn_engine import _read_log_tail
+
+        alvo = os.path.join(self.tmp, "grande.log")
+        with open(alvo, "w", encoding="utf-8") as handle:
+            handle.write("x" * 200 + "\n")
+            handle.write("ultima linha\n")
+        tail = _read_log_tail(alvo, lines=50, max_bytes=50)
+        self.assertIn("ultima linha", tail)
+
+    def test_failed_connect_points_to_charon_log(self):
+        """
+        Sem a pista do caminho, o usuario fica so com a palavra "timeout" e nao
+        descobre que o motivo real esta no charon.log.
+        """
+        import unittest.mock as mock
+
+        import vpn_engine
+
+        # O path real é C:\\ProgramData\\...; sem redirecionar, o teste criaria
+        # essa pasta dentro do repositório.
+        log_file = os.path.join(self.tmp, "charon.log")
+        with open(log_file, "w", encoding="utf-8") as handle:
+            handle.write("[IKE] authentication failure\n")
+
+        runner = FakeRunner(
+            {
+                "sc query strongSwan IKE service": (0, "STATE : 4 RUNNING", ""),
+                "sc query IKEEXT": (0, "STATE : 1 STOPPED", ""),
+                "swanctl.exe --load-all": (0, "loaded", ""),
+                "swanctl.exe --list-conns": (0, "connections:\n  forticlient: IKEv2", ""),
+                "swanctl.exe --initiate": (1, "initiate failed: timeout", ""),
+                "swanctl.exe --list-sas": (0, "", ""),
+            }
+        )
+        engine = VpnEngine(platform="windows", runner=runner)
+        settings = {
+            "gateway": "198.51.100.100", "local_ip": "192.168.0.5", "user": "u",
+            "password": "p", "psk": "k", "vip_strategy": "none",
+        }
+        with mock.patch.object(vpn_engine, "windows_charon_log_file", return_value=log_file):
+            status = engine.connect(settings)
+        self.assertFalse(status.connected)
+        self.assertIn("Log do motor", status.error)
+        self.assertIn(log_file, status.error)
+
+    def test_diagnose_reports_charon_log(self):
+        """O log do daemon precisa entrar no pacote, senao o path nao resolve."""
+        engine = VpnEngine(platform="windows", runner=self._runner())
+        info = engine.diagnose()
+        self.assertIn("log do charon (caminho)", info)
+        self.assertIn("log do charon (ultimas linhas)", info)
+        self.assertIn("charon.log", info["log do charon (caminho)"])
+
     def test_windows_calls_run_in_swanctl_config_dir(self):
         """
         Regressao do bug de campo: o swanctl deriva o diretorio de configuracao
@@ -300,7 +480,7 @@ class TestWindowsEngine(unittest.TestCase):
             {
                 "gateway": "198.51.100.100",
                 "local_ip": "192.168.0.5",
-                "user": "miranda",
+                "user": "usuario",
                 "password": "senha",
                 "psk": "psk",
                 "vip_strategy": "none",
@@ -336,7 +516,7 @@ class TestWindowsEngine(unittest.TestCase):
             {
                 "gateway": "198.51.100.100",
                 "local_ip": "172.16.1.27",
-                "user": "miranda",
+                "user": "usuario",
                 "password": "senha",
                 "psk": "psk",
                 "vip_strategy": "none",
@@ -382,7 +562,7 @@ class TestWindowsEngine(unittest.TestCase):
             {
                 "gateway": "198.51.100.100",
                 "local_ip": "172.16.1.27",
-                "user": "miranda",
+                "user": "usuario",
                 "password": "senha",
                 "psk": "psk",
                 "vip_strategy": "none",

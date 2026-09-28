@@ -1,0 +1,43 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: forticlient-vpn
+Source: https://github.com/Miranda3000-CPU/forti-ikev2-linux
+
+Files: *
+Copyright: 2026 DTIC / PRODEPA
+License: GPL-3.0-or-later
+
+Files: vendor/windows/*
+Copyright: strongSwan project and contributors
+License: GPL-2.0-only
+Comment: Binários não versionados neste repositório; compilados do tarball
+ upstream strongswan-6.1.0.tar.bz2 sem modificações. Ver SOURCE-OFFER.txt.
+
+License: GPL-3.0-or-later
+ This program is free software: you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the Free
+ Software Foundation, either version 3 of the License, or (at your option)
+ any later version.
+ .
+ This program is distributed in the hope that it will be useful, but WITHOUT
+ ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ more details.
+ .
+ On Debian systems, the full text of the GNU General Public License version 3
+ can be found in /usr/share/common-licenses/GPL-3. A cópia completa acompanha
+ o pacote em /usr/share/doc/forticlient-vpn/LICENSE.
+ .
+ O código-fonte completo está em https://github.com/Miranda3000-CPU/forti-ikev2-linux
+
+License: GPL-2.0-only
+ This program is free software; you can redistribute it and/or modify it under
+ the terms of the GNU General Public License version 2 as published by the Free
+ Software Foundation.
+ .
+ This program is distributed in the hope that it will be useful, but WITHOUT
+ ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ more details.
+ .
+ On Debian systems, the full text of the GNU General Public License version 2
+ can be found in /usr/share/common-licenses/GPL-2.

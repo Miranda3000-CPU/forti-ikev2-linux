@@ -88,9 +88,9 @@ class TestFortiClientVPN(unittest.TestCase):
 
     def test_ci_builds_the_installer(self):
         """Sem build local: o CI gera o instalador e publica como artefato."""
-        path = os.path.join(BASE_DIR, ".github", "workflows", "windows-installer.yml")
-        self.assertTrue(os.path.exists(path))
-        content = read(".github/workflows/windows-installer.yml")
+        path = os.path.join(BASE_DIR, ".github", "workflows", "build.yml")
+        self.assertTrue(os.path.exists(path), "workflow .github/workflows/build.yml ausente")
+        content = read(".github/workflows/build.yml")
         self.assertIn("msys2", content.lower())
         self.assertIn("ISCC", content)
         self.assertIn("upload-artifact", content)

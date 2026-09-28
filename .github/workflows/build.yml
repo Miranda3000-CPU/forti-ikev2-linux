@@ -1,0 +1,268 @@
+name: Build e release
+
+# Gera os binários de distribuição (Windows .exe e Linux .deb) e, em tags v*,
+# publica a GitHub Release. O objetivo é que o usuário final baixe o programa
+# pronto, sem compilar nada.
+#
+# Fluxo:
+#   push/PR   -> testes + artefatos (artefatos do Actions expiram em 90 dias;
+#                para distribuir, use a Release de uma tag)
+#   tag v*    -> os mesmos artefatos, publicados como Release
+
+on:
+  # Sem `paths`: filtro de caminho também é avaliado em push de tag, e uma tag
+  # normalmente não casa com nenhum caminho — a release acabaria nunca rodando.
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Um build por vez: dois pushes seguidos não devem disputar o mesmo runner.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+# Padrão: só leitura. O job de release amplia paracontents: write.
+permissions:
+  contents: read
+
+env:
+  # StrongSwan embarcado no Windows é GPLv2: a release precisa publicar o fonte
+  # correspondente. Manter em um só lugar, junto do NOTICE.
+  STRONGSWAN_VERSION: "6.1.0"
+  STRONGSWAN_SHA256: "fe6c97481298767213cfc2e9a1da29fdd8018d481ff4cb9cf0283099654f20d4"
+
+jobs:
+  testes:
+    name: Testes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependências
+        # python3-yaml: lido por tests/test_distribution.py para conferir o
+        # próprio workflow. A suíte pula o teste se o módulo faltar.
+        run: sudo apt-get update -qq && sudo apt-get install -y python3-tk python3-yaml
+      - name: Conferir a sincronia da versão
+        run: |
+          version="$(cat VERSION)"
+          grep -qx "AppVersion=$version" build/FortiClient-VPN-Setup.iss \
+            || { echo "::error::AppVersion do .iss divergiu de VERSION ($version). Rode: python3 build/gen_build_info.py"; exit 1; }
+          grep -qx "Version: $version" debian/control \
+            || { echo "::error::Version do debian/control divergiu de VERSION ($version). Rode: python3 build/gen_build_info.py"; exit 1; }
+      - name: Nenhum segredo versionado
+        run: |
+          # config/forti.conf guarda PSK e senha do gateway: tem de estar
+          # desversionado e ignorado, sempre.
+          #
+          # A ordem importa e o `if` é obrigatório: o shell do Actions roda com
+          # `set -e`, e um `A && B` que termina em A-falhou aborta o passo.
+          # Note que `git check-ignore` responde "não ignorado" para arquivo
+          # versionado (o .gitignore não se aplica ao índice) — por isso o teste
+          # de versionamento vem primeiro e dá a mensagem exata.
+          if git ls-files --error-unmatch config/forti.conf 2>/dev/null; then
+            echo "::error::config/forti.conf está versionado e contém PSK/senha do gateway. Remova do índice e rode a limpeza do histórico."
+            exit 1
+          fi
+          git check-ignore -q config/forti.conf \
+            || { echo "::error::config/forti.conf não está no .gitignore"; exit 1; }
+          echo "ok: config/forti.conf ignorado e não versionado"
+      - name: Rodar a suíte
+        run: python3 -m unittest discover -s tests -v
+
+  deb:
+    name: Pacote Linux (.deb)
+    runs-on: ubuntu-latest
+    needs: testes
+    steps:
+      - uses: actions/checkout@v4
+      - name: Empacotar
+        run: ./build/build_deb.sh
+      - name: Conferir o conteúdo do pacote
+        run: |
+          dpkg-deb --info dist/*.deb
+          dpkg-deb --contents dist/*.deb
+          # Sem o ícone nos temas do sistema o atalho do menu aparece genérico.
+          dpkg-deb --contents dist/*.deb | grep -q 'icons/hicolor/256x256/apps/forticlient-vpn.png' \
+            || { echo "::error::ícone do hicolor ausente no pacote"; exit 1; }
+          dpkg-deb --contents dist/*.deb | grep -q 'share/doc/forticlient-vpn/LICENSE' \
+            || { echo "::error::LICENSE ausente no pacote"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  windows:
+    name: Instalador Windows (.exe)
+    # Em PR só os testes e o .deb: compilar o strongSwan consome ~10 min.
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    needs: testes
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain do motor strongSwan (MSYS2)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            tar
+            bzip2
+            curl
+            perl
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-openssl
+            mingw-w64-x86_64-pkgconf
+
+      - name: Compilar o motor strongSwan para Windows
+        shell: msys2 {0}
+        env:
+          STRONGSWAN_VERSION: ${{ env.STRONGSWAN_VERSION }}
+        run: bash build/build_strongswan_windows_msys2.sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dependências do empacotamento
+        run: pip install pyinstaller pillow
+
+      - name: Versão e commit no pacote
+        run: python build/gen_build_info.py
+
+      - name: Gerar o executável
+        run: pyinstaller --noconfirm --distpath build/output --workpath build/output/work build/FortiClient-VPN.spec
+
+      - name: Instalar o Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Gerar o instalador
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe não encontrado em $iscc" }
+          & $iscc "build\FortiClient-VPN-Setup.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC falhou com código $LASTEXITCODE" }
+
+      # A assinatura tem que vir depois do ISCC: o instalador é reconstruído a
+      # partir do .exe, então assinar antes não produziria um instalador
+      # assinado. O PFX chega como segredo do repositório e é apagado no fim.
+      - name: Assinar os artefatos
+        shell: pwsh
+        env:
+          FCT_SIGN_PFX_BASE64: ${{ secrets.FCT_SIGN_PFX_BASE64 }}
+          FCT_SIGN_PASS: ${{ secrets.FCT_SIGN_PASS }}
+          FCT_TSA_URL: ${{ secrets.FCT_TSA_URL }}
+          FCT_SIGN_SUBJECT: ${{ vars.FCT_SIGN_SUBJECT }}
+          FCT_SIGN_URL: ${{ vars.FCT_SIGN_URL }}
+        run: |
+          $temCert = -not [string]::IsNullOrWhiteSpace($env:FCT_SIGN_PFX_BASE64)
+          $isRelease = $env:GITHUB_REF -like 'refs/tags/v*'
+
+          if ($temCert) {
+            $pfx = "$env:RUNNER_TEMP\forticlient.pfx"
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:FCT_SIGN_PFX_BASE64))
+            "FCT_SIGN_PFX=$pfx" >> $env:GITHUB_ENV
+            "FCT_SIGN_REQUIRED=1" >> $env:GITHUB_ENV
+            Write-Host "Certificado carregado; os artefatos serão assinados."
+          } elseif ($isRelease) {
+            # Release pública sem assinatura escapa do aviso do SmartScreen e
+            # alguém sempre clica em "Executar assim mesmo". Melhor falhar.
+            throw "Release sem assinatura: defina o segredo FCT_SIGN_PFX_BASE64 (e FCT_SIGN_PASS)."
+          } else {
+            Write-Host "Sem certificado configurado: build de verificação seguirá sem assinar."
+          }
+
+          bash build/sign_windows.sh
+
+          if ($temCert) {
+            # Sem carimbo de tempo, a assinatura expira com o certificado e o
+            # instalador volta a ser tratado como não assinado.
+            $verif = & signtool verify /pa /v "dist\FortiClient-VPN-Setup.exe" 2>&1 | Out-String
+            if ($verif -notmatch "Valid')") { throw "verificação da assinatura falhou:`n$verif" }
+            Write-Host $verif
+            [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\forticlient.pfx", [byte[]]@())
+            Remove-Item -Force $pfx -ErrorAction SilentlyContinue
+          }
+
+      # O strongSwan é GPLv2 e o instalador embarca seus binários. Sem o fonte
+      # correspondente junto, a redistribuição viola a GPLv2 §2. O tarball é o
+      # upstream íntegro (nenhum patch é aplicado) — só as flags mudam, e elas
+      # estão no repositório.
+      - name: Conferir o tarball do strongSwan (GPLv2)
+        shell: pwsh
+        run: |
+          $tarball = "build\cache\strongswan-msys2\strongswan-${{ env.STRONGSWAN_VERSION }}.tar.bz2"
+          if (-not (Test-Path $tarball)) { throw "tarball do strongSwan não encontrado em $tarball" }
+          $hash = (Get-FileHash -Algorithm SHA256 $tarball).Hash.ToLower()
+          if ($hash -ne "${{ env.STRONGSWAN_SHA256 }}") { throw "SHA-256 do tarball divergiu: $hash" }
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item $tarball release/
+
+      - name: Publicar o instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            dist/FortiClient-VPN-Setup.exe
+            release/strongswan-*.tar.bz2
+          if-no-files-found: error
+
+  release:
+    name: Publicar a release
+    needs: [deb, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Conferir que a tag bate com ./VERSION
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(cat VERSION)"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::a tag $GITHUB_REF_NAME não corresponde a VERSION ($version). Atualize ./VERSION e a tag."
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd release
+          sha256sum ./* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Criar a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(cat VERSION)"
+          {
+            echo "Instaladores do FortiClient VPN $version (DTIC / PRODEPA)."
+            echo
+            echo "| Sistema | Arquivo |"
+            echo "| --- | --- |"
+            echo "| Windows (x64) | \`FortiClient-VPN-Setup.exe\` |"
+            echo "| Debian / Ubuntu | \`forticlient-vpn_${version}_all.deb\` |"
+            echo
+            echo "O instalador do Windows não é assinado digitalmente: o Windows pode"
+            echo "exibir aviso do SmartScreen (*Mais informações → Executar assim mesmo*)."
+            echo
+            echo "O \`strongswan-*.tar.bz2\` é o código-fonte do motor strongSwan (GPLv2)"
+            echo "embarcado no instalador, publicado para cumprir a GPLv2. Ver \`NOTICE\` e"
+            echo "\`SOURCE-OFFER.txt\`."
+            echo
+            echo "Verifique os arquivos com \`SHA256SUMS\`."
+          } > notas.md
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --title "FortiClient VPN $version" \
+            --notes-file notas.md

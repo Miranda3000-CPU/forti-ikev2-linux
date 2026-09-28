@@ -3,6 +3,10 @@ set -e
 
 rm -f /etc/sudoers.d/forticlient-vpn
 
+# swanctl precisa de privilégio para derrubar o túnel; sem sudoers (já removido
+# acima) o comando pediria senha, então chama-se direto e ignora o resultado.
 if command -v swanctl >/dev/null 2>&1; then
     swanctl --terminate --ike forticlient >/dev/null 2>&1 || true
 fi
+
+exit 0

@@ -1,0 +1,13 @@
+#!/bin/bash
+set -e
+
+# Os arquivos já foram removidos: é aqui que os caches precisam ser refeitos,
+# senão o menu continua mostrando o atalho e o ícone do pacote desinstalado.
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f /usr/share/icons/hicolor || true
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database /usr/share/applications || true
+fi
+
+exit 0

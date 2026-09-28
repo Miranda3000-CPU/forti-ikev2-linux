@@ -96,5 +96,12 @@ fi
 log "Compilando o instalador com Inno Setup"
 "$WINE_BIN" "$ISCC" "$iss_win" || die "ISCC falhou ao gerar o instalador."
 
+# ───────────────────────────────────────────── 5. assinatura (opcional)
+# Sem FCT_SIGN_PFX o script só avisa. A assinatura tem que vir DEPOIS do
+# instalador: assinar o .exe antes do ISCC não produziria um instalador
+# assinado, porque o Inno Setup reconstrói o arquivo final.
+FCT_TSA_URL="${FCT_TSA_URL:-}" FCT_SIGN_REQUIRED="${FCT_SIGN_REQUIRED:-0}" \
+    "$ROOT_DIR/build/sign_windows.sh"
+
 log "Concluído. Artefatos em $DIST_DIR:"
 ls -lh "$DIST_DIR"

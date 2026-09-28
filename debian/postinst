@@ -23,3 +23,14 @@ chmod 0440 "$SUDOERS_FILE"
 chown root:root "$SUDOERS_FILE"
 
 chmod +x /usr/share/forticlient-vpn/vpn-gui.py
+
+# Sem isto o atalho do menu entra sem ícone e o .desktop não é lido até o
+# próximo login. As ferramentas podem não existir em installs mínimos.
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f /usr/share/icons/hicolor || true
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database /usr/share/applications || true
+fi
+
+exit 0

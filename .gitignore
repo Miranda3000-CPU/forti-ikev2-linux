@@ -1,6 +1,7 @@
 dist/
 build/output/
 build/cache/
+build/deb/
 vendor/windows/*.exe
 vendor/windows/*.dll
 *.pyc
@@ -10,3 +11,6 @@ venv/
 .env
 build_info.py
 *.log
+
+# Configuração local com credenciais reais do gateway: NUNCA versionar.
+config/forti.conf

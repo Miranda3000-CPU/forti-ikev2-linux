@@ -1,0 +1,68 @@
+OFERTA ESCRITA DE FORNECIMENTO DO CÓDIGO-FONTE
+================================================
+
+(GNU General Public License, versão 2, §3(b))
+
+Esta oferta refere-se ao programa "FortiClient VPN Manager", distribuído pela
+DTIC / PRODEPA, e ao motor strongSwan compilado que acompanha o instalador
+Windows deste programa.
+
+────────────────────────────────────────────────────────────────────────────
+1. PROGRAMA COBERTO POR ESTA OFERTA
+────────────────────────────────────────────────────────────────────────────
+
+FortiClient VPN Manager (DTIC / PRODEPA)
+Versão: ver https://github.com/Miranda3000-CPU/forti-ikev2-linux/releases (arquivo VERSION)
+Copyright (C) 2026 DTIC / PRODEPA
+Licença do programa: GNU General Public License v3.0 ou superior
+                                      (https://www.gnu.org/licenses/gpl-3.0.html)
+
+────────────────────────────────────────────────────────────────────────────
+2. PROGRAMA SEPARADO DISTRIBUÍDO JUNTO (GPLv2)
+────────────────────────────────────────────────────────────────────────────
+
+strongSwan 6.1.0 — https://www.strongswan.org/
+Licença: GNU General Public License v2.0
+Binários distribuídos: vendor/windows/charon-svc.exe, vendor/windows/swanctl.exe
+
+O fonte correspondente é o tarball upstream íntegro, sem modificações:
+
+    strongswan-6.1.0.tar.bz2
+    SHA-256: fe6c97481298767213cfc2e9a1da29fdd8018d481ff4cb9cf0283099654f20d4
+    https://download.strongswan.org/strongswan-6.1.0.tar.bz2
+
+A compilação usa apenas flags de ./configure, registradas em
+build/build_strongswan_windows.sh e build/build_strongswan_windows_msys2.sh.
+Nenhum patch é aplicado ao fonte do strongSwan.
+
+────────────────────────────────────────────────────────────────────────────
+3. COMPROMISSO
+────────────────────────────────────────────────────────────────────────────
+
+A DTIC / PRODEPA compromete-se a fornecer o código-fonte completo do programa
+e o código-fonte correspondente do strongSwan acima, por qualquer meio, como
+parte de uma oferta de origem, por no mínimo três anos a contar da data da
+primeira distribuição de cada versão.
+
+Pedidos de código-fonte devem ser dirigidos a:
+
+    DTIC / PRODEPA — manutenção do FortiClient VPN Manager
+    E-mail: jeielmiranda@duck.com
+    Endereço: Belém - PA, Brasil
+
+O código-fonte também está disponível publicamente no repositório do projeto e,
+para o strongSwan, no tarball anexado a cada release do instalador.
+
+────────────────────────────────────────────────────────────────────────────
+4. COMO VERIFICAR A CORRESPONDÊNCIA
+────────────────────────────────────────────────────────────────────────────
+
+Para reconstruir os binários a partir do fonte, basta executar, em ambiente
+MinGW64 (Linux ou MSYS2):
+
+    tar xjf strongswan-6.1.0.tar.bz2
+    cd strongswan-6.1.0
+    ./configure <-- as flags de build_strongswan_windows_msys2.sh >
+
+O script de build imprime a linha completa de ./configure, o commit do projeto
+que gerou o pacote e o conteúdo final de vendor/windows.

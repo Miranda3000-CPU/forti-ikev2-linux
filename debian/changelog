@@ -1,0 +1,13 @@
+forticlient-vpn (2.1.2) unstable; urgency=medium
+
+  * Primeira versão publicada em repositório público.
+  * Documentação sob GPLv3; NOTICE e SOURCE-OFFER.txt cobrem o strongSwan
+    embarcado no instalador Windows (GPLv2).
+  * Versão única em ./VERSION, propagada para o instalador Windows, o .deb e o
+    executável (antes divergiam: 1.0.0 no Linux, 2.1.2 no Windows).
+  * Ícone do aplicativo instalado nos temas de ícones do sistema
+    (hicolor e pixmaps), antes o atalho aparecia sem ícone.
+  * Página inicial do pacote derivada do remote git, para não apontar para
+    um repositório inexistente.
+
+ -- DTIC / PRODEPA <jeielmiranda@duck.com>  Mon, 28 Sep 2026 09:00:00 -0300

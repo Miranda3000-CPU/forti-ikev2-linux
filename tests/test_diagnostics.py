@@ -71,7 +71,7 @@ class TestDiagnostics(unittest.TestCase):
         with open(log_file, "w", encoding="utf-8") as handle:
             handle.write("linha de log\n")
 
-        cfg = {"user": "miranda", "password": "s3cr3t", "psk": "psk1"}
+        cfg = {"user": "usuario", "password": "s3cr3t", "psk": "psk1"}
         dest = os.path.join(tmp, "diag.zip")
         path = vpn_config.build_diagnostics(
             dest=dest, cfg=cfg, extra_text={"sc query": "RUNNING"}, log_file=log_file
