@@ -7,10 +7,31 @@ segue [SemVer](https://semver.org/lang/pt-BR/).
 A versão é declarada em [`VERSION`](VERSION) e propagada para o `.deb`, para o
 instalador Windows e para o executável.
 
-## [Não publicado]
+## [2.1.3] — 2026-10-02
 
 ### Corrigido
 
+- **O IP virtual do túnel ia para dentro do `local_addrs`.** Com o túnel de pé o
+  kernel roteia tudo por ele, e o `getsockname()` da detecção devolvia o VIP
+  (`192.0.2.12/32`) em vez do IP físico da interface. O valor era gravado no
+  `swanctl.conf`; na tentativa seguinte o `IKE_SA_INIT` partia de um endereço
+  que só existe enquanto o túnel está de pé, e nenhuma resposta chegava. A
+  detecção agora descarta endereços `/32` e cai para o IP primário da interface
+  com rota default.
+- **Configuração migrada entre PCs envenenava a conexão.** Um `config.json`
+  copiado de outra máquina traz o `custom_local_ip` **daquela** máquina. O
+  endereço agora é validado contra as interfaces locais: se não existir (ou for
+  `/32`), é ignorado, o app volta ao detectado e o `local_addrs` nem é escrito.
+- **No Linux as SAs penduradas nunca eram encerradas.** O `_connect_windows` já
+  fazia isso; o caminho Linux não. Duas SAs meio-abertas, com identidades e
+  `local_addrs` diferentes, somavam retransmissões e travavam o `--initiate`.
+  Agora o Linux também executa `swanctl --terminate --ike forticlient` antes do
+  `--load-all`, e `--list-conns` entra no sudoers para o diagnóstico.
+- **No Linux o motivo real da falha não aparecia em lugar nenhum.** O
+  `charon.log` só era coletado no Windows. O diagnóstico Linux agora anexa o
+  journal do strongSwan (`journalctl -u strongswan`), o `ip route`, o
+  `--list-conns` e o `swanctl.conf`; a mensagem de erro da conexão traz as
+  últimas linhas do motor — ou o comando exato para obtê-las.
 - **Endereço do Painel FortiOS saía no artefato público.** O atalho
   "Abrir Painel Web" trazia um endereço interno hardcoded, que ia parar dentro
   do `.exe` e do `.deb`. Agora a URL só entra no build via `FCT_WEB_URL`
@@ -93,5 +114,6 @@ instalador Windows e para o executável.
 - IPs internos reais (gateway e host) trocados por faixas reservadas para
   documentação (RFC 5737) em código, exemplo e testes.
 
-[Não publicado]: https://github.com/Miranda3000-CPU/forti-ikev2-linux/compare/v2.1.2...HEAD
+[Não publicado]: https://github.com/Miranda3000-CPU/forti-ikev2-linux/compare/v2.1.3...HEAD
+[2.1.3]: https://github.com/Miranda3000-CPU/forti-ikev2-linux/releases/tag/v2.1.3
 [2.1.2]: https://github.com/Miranda3000-CPU/forti-ikev2-linux/releases/tag/v2.1.2

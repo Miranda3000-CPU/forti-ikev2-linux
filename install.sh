@@ -73,6 +73,7 @@ TMP_SUDOERS=$(mktemp)
 cat << 'EOF' > "$TMP_SUDOERS"
 ALL ALL=(root) NOPASSWD: /usr/sbin/swanctl --load-all
 ALL ALL=(root) NOPASSWD: /usr/sbin/swanctl --list-sas
+ALL ALL=(root) NOPASSWD: /usr/sbin/swanctl --list-conns
 ALL ALL=(root) NOPASSWD: /usr/sbin/swanctl --initiate --child forticlient
 ALL ALL=(root) NOPASSWD: /usr/sbin/swanctl --terminate --ike forticlient
 ALL ALL=(root) NOPASSWD: /usr/bin/tee /etc/swanctl/conf.d/forti.conf

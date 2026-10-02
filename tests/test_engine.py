@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
@@ -174,6 +175,7 @@ class TestStrongswanConf(unittest.TestCase):
 class TestLinuxEngine(unittest.TestCase):
     def test_connect_success(self):
         runner = FakeRunner({"swanctl --initiate": (0, "initiate completed successfully", ""),
+                             "swanctl --list-conns": (0, "connections:\n  forticlient: IKEv2", ""),
                              "swanctl --list-sas": (0, ESTABLISHED, "")})
         engine = VpnEngine(platform="linux", runner=runner)
         status = engine.connect({"gateway": "198.51.100.100", "local_ip": "203.0.113.7",
@@ -187,6 +189,7 @@ class TestLinuxEngine(unittest.TestCase):
 
     def test_connect_failure_maps_error(self):
         runner = FakeRunner({"swanctl --initiate": (1, "[IKE] authentication_failure", ""),
+                             "swanctl --list-conns": (0, "connections:\n  forticlient: IKEv2", ""),
                              "swanctl --list-sas": (0, "", "")})
         engine = VpnEngine(platform="linux", runner=runner)
         status = engine.connect({"gateway": "gw", "local_ip": "1.2.3.4",
@@ -206,6 +209,243 @@ class TestLinuxEngine(unittest.TestCase):
         available, detail = engine.availability()
         self.assertIsInstance(available, bool)
         self.assertTrue(detail)
+
+    # ------------------------------------------- correcoes de 2026-10-02
+    #
+    # Campo: o mesmo build funcionou no PC1 e falhou no PC2. O PC2 herdou a
+    # configuração do PC1, cujo `local_addrs` era o VIP do túnel (192.0.2.12),
+    # um endereço que só existe na máquina de origem. Alem disso o Linux, ao
+    # contrário do Windows, nunca encerrava as SAs penduradas e não coletava o
+    # log do charon — o motivo real da falha não aparecia em lugar nenhum.
+
+    def test_connect_terminates_stale_sa_before_load_all(self):
+        """SA pendurada de tentativa anterior não pode sobreviver ao novo initiate."""
+        runner = FakeRunner({"swanctl --initiate": (0, "initiate completed successfully", ""),
+                             "swanctl --list-conns": (0, "connections:\n  forticlient: IKEv2", ""),
+                             "swanctl --list-sas": (0, ESTABLISHED, "")})
+        engine = VpnEngine(platform="linux", runner=runner)
+        engine.connect({"gateway": "198.51.100.100", "local_ip": "203.0.113.7",
+                        "user": "u", "password": "p", "psk": "k"})
+
+        commands = runner.commands()
+        terminate = [i for i, c in enumerate(commands) if "--terminate --ike forticlient" in c]
+        load = [i for i, c in enumerate(commands) if "--load-all" in c]
+        initiate = [i for i, c in enumerate(commands) if "--initiate" in c]
+        self.assertTrue(terminate, "nenhuma SA pendurada foi encerrada: %s" % commands)
+        self.assertTrue(load and initiate)
+        self.assertLess(terminate[0], load[0], "o terminate tem que vir ANTES do load-all")
+        self.assertLess(terminate[0], initiate[0], "o terminate tem que vir ANTES do initiate")
+
+    def test_connect_drops_local_ip_from_another_machine(self):
+        """
+        Regressao de campo: `local_addrs = 192.0.2.12` (VIP do túnel do PC1)
+        no PC2 gerava IKE_SA_INIT sem resposta. Endereço que não existe nesta
+        máquina tem que ser omitido, deixando o strongSwan escolher pela rota.
+        """
+        import unittest.mock as mock
+
+        import vpn_engine
+
+        runner = FakeRunner({"swanctl --initiate": (0, "initiate completed successfully", ""),
+                             "swanctl --list-conns": (0, "connections:\n  forticlient: IKEv2", ""),
+                             "swanctl --list-sas": (0, ESTABLISHED, "")})
+        engine = VpnEngine(platform="linux", runner=runner)
+        with mock.patch.object(vpn_engine, "sanitize_local_ip", return_value=""):
+            engine.connect({"gateway": "198.51.100.100", "local_ip": "192.0.2.12",
+                            "user": "u", "password": "p", "psk": "k"})
+
+        conf = [c["input_text"] for c in runner.calls if c["argv"][:2] == ["sudo", "tee"]][0]
+        self.assertNotIn("local_addrs", conf)
+        self.assertIn("remote_addrs = 198.51.100.100", conf)
+
+    def test_connect_keeps_local_ip_when_it_exists(self):
+        import unittest.mock as mock
+
+        import vpn_engine
+
+        runner = FakeRunner({"swanctl --initiate": (0, "initiate completed successfully", ""),
+                             "swanctl --list-conns": (0, "connections:\n  forticlient: IKEv2", ""),
+                             "swanctl --list-sas": (0, ESTABLISHED, "")})
+        engine = VpnEngine(platform="linux", runner=runner)
+        with mock.patch.object(vpn_engine, "sanitize_local_ip", return_value="203.0.113.7"):
+            engine.connect({"gateway": "198.51.100.100", "local_ip": "203.0.113.7",
+                            "user": "u", "password": "p", "psk": "k"})
+
+        conf = [c["input_text"] for c in runner.calls if c["argv"][:2] == ["sudo", "tee"]][0]
+        self.assertIn("local_addrs  = 203.0.113.7", conf)
+
+    def test_connect_failure_includes_engine_log(self):
+        """Sem o log do charon o motivo real (AUTHENTICATION_FAILED) some."""
+        runner = FakeRunner({
+            "swanctl --initiate": (1, "[IKE] establishing CHILD_SA", ""),
+            "swanctl --list-conns": (0, "connections:\n  forticlient: IKEv2", ""),
+            "swanctl --list-sas": (0, "", ""),
+            "journalctl": (0, "charon: authentication_failure EAP-MSCHAPv2 failed", ""),
+        })
+        engine = VpnEngine(platform="linux", runner=runner)
+        status = engine.connect({"gateway": "gw", "local_ip": "",
+                                 "user": "u", "password": "p", "psk": "k"})
+        self.assertFalse(status.connected)
+        self.assertIn("Log do motor", status.error)
+        self.assertIn("authentication_failure", status.error)
+
+    def test_connect_failure_without_journal_tells_how_to_get_it(self):
+        import unittest.mock as mock
+
+        runner = FakeRunner({"swanctl --initiate": (1, "timeout", ""),
+                             "swanctl --list-conns": (0, "connections:\n  forticlient: IKEv2", ""),
+                             "swanctl --list-sas": (0, "", "")})
+        engine = VpnEngine(platform="linux", runner=runner)
+        with mock.patch.object(VpnEngine, "_linux_engine_log", return_value=""):
+            status = engine.connect({"gateway": "gw", "local_ip": "",
+                                     "user": "u", "password": "p", "psk": "k"})
+        self.assertFalse(status.connected)
+        self.assertIn("journalctl -u strongswan", status.error)
+
+    def test_diagnose_linux_includes_engine_log(self):
+        """O pacote de diagnóstico no Linux precisa trazer o journal do charon."""
+        runner = FakeRunner({
+            "systemctl is-active": (0, "active\n", ""),
+            "ip -brief address": (0, "wlo1 UP 203.0.113.7/24", ""),
+            "ip route": (0, "default via 198.51.100.1 dev wlo1", ""),
+            "journalctl": (0, "charon: parsed IKE_AUTH response 1 [ AUTH_FAILED ]", ""),
+        })
+        engine = VpnEngine(platform="linux", runner=runner)
+        info = engine.diagnose()
+        self.assertIn("log do motor (strongSwan/charon)", info)
+        self.assertIn("AUTH_FAILED", info["log do motor (strongSwan/charon)"])
+        self.assertIn("swanctl --list-sas", info)
+        self.assertIn("ip route", info)
+
+    def test_connect_reports_missing_connection_clearly(self):
+        """
+        Regressao de campo: `--load-all` com rc=0 sem carregar nada deve gerar
+        mensagem acionavel, e nao o criptico "CHILD_SA config not found".
+        """
+        runner = FakeRunner({
+            "swanctl --load-all": (0, "", ""),
+            "swanctl --list-conns": (0, "", ""),  # nada carregado
+        })
+        engine = VpnEngine(platform="linux", runner=runner)
+        status = engine.connect({"gateway": "198.51.100.100", "local_ip": "",
+                                 "user": "u", "password": "p", "psk": "k"})
+        self.assertFalse(status.connected)
+        self.assertIn("nao foi carregada", status.error)
+        self.assertIn("forticlient", status.error)
+        self.assertFalse(any("--initiate" in c for c in runner.commands()), runner.commands())
+
+    def test_connect_skips_guard_when_list_conns_unavailable(self):
+        """
+        Sem permissao para `--list-conns` nao se pode concluir nada: abortar a
+        conexao ali quebraria quem tem o sudoers antigo.
+        """
+        runner = FakeRunner({
+            "swanctl --initiate": (0, "initiate completed successfully", ""),
+            "swanctl --list-sas": (0, ESTABLISHED, ""),
+            "swanctl --list-conns": (1, "Permission denied", ""),
+        })
+        engine = VpnEngine(platform="linux", runner=runner)
+        status = engine.connect({"gateway": "198.51.100.100", "local_ip": "",
+                                 "user": "u", "password": "p", "psk": "k"})
+        self.assertTrue(status.connected, status)
+
+
+class TestLocalAddresses(unittest.TestCase):
+    """Regras de endereço que causaram a falha no PC2 (VIP do túnel como origem)."""
+
+    def test_sanitize_is_passthrough_without_ioctl(self):
+        """
+        No Windows não existe ioctl para conferir as interfaces: descartar o IP
+        manual ali seria uma regressao (local_addrs sempre foi manual).
+        """
+        import unittest.mock as mock
+
+        import vpn_engine
+
+        with mock.patch.object(vpn_engine, "fcntl", None):
+            self.assertEqual(vpn_engine.sanitize_local_ip("203.0.113.7"), "203.0.113.7")
+
+    def test_netmask_host_is_a_tunnel_vip(self):
+        import unittest.mock as mock
+
+        import vpn_engine
+
+        with mock.patch.object(vpn_engine, "local_ipv4_netmask", return_value="255.255.255.255"):
+            self.assertTrue(vpn_engine.is_tunnel_vip("192.0.2.12"))
+            self.assertTrue(vpn_engine.is_local_ipv4("192.0.2.12"))
+            self.assertEqual(vpn_engine.sanitize_local_ip("192.0.2.12"), "")
+
+    def test_foreign_ip_is_not_local(self):
+        import unittest.mock as mock
+
+        import vpn_engine
+
+        with mock.patch.object(vpn_engine, "local_ipv4_netmask", return_value=""):
+            self.assertFalse(vpn_engine.is_local_ipv4("192.0.2.12"))
+            self.assertEqual(vpn_engine.sanitize_local_ip("192.0.2.12"), "")
+
+    def test_real_network_address_is_kept(self):
+        import unittest.mock as mock
+
+        import vpn_engine
+
+        with mock.patch.object(vpn_engine, "local_ipv4_netmask", return_value="255.255.255.0"):
+            self.assertEqual(vpn_engine.sanitize_local_ip("203.0.113.7"), "203.0.113.7")
+            self.assertFalse(vpn_engine.is_tunnel_vip("203.0.113.7"))
+
+    def test_empty_stays_empty(self):
+        import vpn_engine
+
+        self.assertEqual(vpn_engine.sanitize_local_ip(""), "")
+        self.assertEqual(vpn_engine.sanitize_local_ip(None), "")
+
+    def test_detect_local_ip_skips_vip_and_uses_default_route(self):
+        """
+        Com o túnel de pé o getsockname devolve o VIP (192.0.2.12). Ele não pode
+        ser escolhido: a detecção cai para o IP da interface com rota default.
+        """
+        import unittest.mock as mock
+
+        import vpn_engine
+
+        def netmask(ip):
+            return "255.255.255.255" if ip == "192.0.2.12" else "255.255.255.0"
+
+        def is_local(ip):
+            return ip in ("192.0.2.12", "203.0.113.7")
+
+        with mock.patch.object(vpn_engine, "_udp_source_for", return_value="192.0.2.12"), \
+                mock.patch.object(vpn_engine, "is_local_ipv4", side_effect=is_local), \
+                mock.patch.object(vpn_engine, "is_tunnel_vip",
+                                  side_effect=lambda ip: ip == "192.0.2.12"), \
+                mock.patch.object(vpn_engine, "local_ipv4_netmask", side_effect=netmask), \
+                mock.patch.object(vpn_engine, "_default_route_interfaces", return_value=["wlo1"]), \
+                mock.patch.object(vpn_engine, "_interface_ipv4", return_value="203.0.113.7"):
+            self.assertEqual(vpn_engine.detect_local_ip("198.51.100.100"), "203.0.113.7")
+
+    def test_detect_local_ip_keeps_healthy_source(self):
+        import unittest.mock as mock
+
+        import vpn_engine
+
+        with mock.patch.object(vpn_engine, "_udp_source_for", return_value="203.0.113.7"), \
+                mock.patch.object(vpn_engine, "is_local_ipv4", return_value=True), \
+                mock.patch.object(vpn_engine, "is_tunnel_vip", return_value=False):
+            self.assertEqual(vpn_engine.detect_local_ip("198.51.100.100"), "203.0.113.7")
+
+    def test_linux_engine_log_prefers_journal(self):
+        import vpn_engine
+
+        runner = FakeRunner({"journalctl": (0, "charon: NO_PROPOSAL_CHOSEN", "")})
+        text = vpn_engine.linux_engine_log(runner, lines=10)
+        self.assertIn("NO_PROPOSAL_CHOSEN", text)
+
+    def test_linux_engine_log_empty_when_unavailable(self):
+        import vpn_engine
+
+        runner = FakeRunner()
+        with unittest.mock.patch.object(vpn_engine, "LINUX_LOG_FILES", ()):
+            self.assertEqual(vpn_engine.linux_engine_log(runner, lines=10), "")
 
 
 class TestWindowsEngine(unittest.TestCase):

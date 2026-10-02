@@ -18,6 +18,8 @@ import os
 import re
 import shutil
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -25,6 +27,11 @@ import time
 from collections import namedtuple
 
 from vpn_config import config_dir, ensure_dir, get_logger
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows não tem fcntl
+    fcntl = None
 
 IS_WINDOWS = sys.platform == "win32"
 IS_LINUX = sys.platform.startswith("linux")
@@ -238,6 +245,185 @@ def map_engine_error(output):
     if lines:
         return "Falha na conexao: " + " | ".join(lines[-3:])[:200]
     return "Falha na conexao (sem detalhes do motor)."
+
+
+# ═══════════════════════════════════════════════════ endereços locais
+
+# `ip`/`ifconfig` não são dependência do aplicativo: a descoberta do endereço
+# de origem é feita com socket + ioctl (mesma família do que o `ip addr` usa).
+_SIOCGIFADDR = 0x8915
+_SIOCGIFNETMASK = 0x891B
+_NETMASK_HOST = "255.255.255.255"
+
+
+def _interface_ipv4(interface, request=_SIOCGIFADDR):
+    """Endereço IPv4 (ou máscara) de uma interface, via ioctl. "" se não houver."""
+    if fcntl is None or not interface:
+        return ""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            packed = struct.pack("256s", interface[:15].encode("utf-8"))
+            data = fcntl.ioctl(sock.fileno(), request, packed)
+        return socket.inet_ntoa(data[20:24])
+    except (OSError, ValueError, struct.error):
+        return ""
+
+
+def local_ipv4_netmask(ip):
+    """Máscara da interface que possui `ip`; "" quando `ip` não é local."""
+    ip = (ip or "").strip()
+    if not ip or fcntl is None:
+        return ""
+    try:
+        interfaces = socket.if_nameindex()
+    except OSError:  # pragma: no cover - sistema sem /sys/class/net
+        return ""
+    for _index, interface in interfaces:
+        if _interface_ipv4(interface) == ip:
+            return _interface_ipv4(interface, _SIOCGIFNETMASK)
+    return ""
+
+
+def is_local_ipv4(ip):
+    """True quando `ip` está configurado em alguma interface desta máquina."""
+    return bool(local_ipv4_netmask(ip))
+
+
+def is_tunnel_vip(ip):
+    """
+    True para endereço /32 — a forma típica do IP virtual que o FortiGate
+    atribui ao túnel.
+
+    O VIP é um *destino*, nunca uma origem válida para subir uma SA nova: como
+    `local_addrs` ele faz o IKE_SA_INIT partir de um endereço que só existe
+    enquanto o túnel está de pé, e nenhuma resposta chega.
+    """
+    return local_ipv4_netmask(ip) == _NETMASK_HOST
+
+
+def sanitize_local_ip(ip):
+    """
+    Devolve `ip` apenas quando ele é um endereço local utilizável como origem.
+
+    Uma configuração migrada de outro PC traz o VIP do túnel daquela máquina
+    (em campo: `local_addrs = 192.0.2.12`, que só existe no PC de origem).
+    Aqui ele não é um endereço local — ou é um /32 — e precisa virar "" para o
+    strongSwan escolher a origem pela rota, em vez de falhar em silêncio.
+    """
+    ip = (ip or "").strip()
+    if not ip:
+        return ""
+    if fcntl is None:
+        # Fora do Linux não há ioctl para conferir as interfaces: o valor do
+        # usuário é preservado (no Windows `local_addrs` sempre foi manual).
+        return ip
+    mask = local_ipv4_netmask(ip)
+    if not mask or mask == _NETMASK_HOST:
+        return ""
+    return ip
+
+
+def _udp_source_for(target_ip):
+    """IP de origem que o kernel usaria para falar com `target_ip` (sem shell)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(0.5)
+            sock.connect((target_ip, 500))
+            ip = sock.getsockname()[0]
+        return ip or ""
+    except OSError:
+        return ""
+
+
+def _default_route_interfaces():
+    """
+    Interfaces com rota default, em ordem de métrica (menor primeiro).
+
+    Lê /proc/net/route direto (arquivo texto), sem invocar `ip route`.
+    """
+    entries = []
+    try:
+        with open("/proc/net/route", "r", encoding="ascii", errors="replace") as handle:
+            next(handle, None)
+            for line in handle:
+                fields = line.split()
+                if len(fields) < 8:
+                    continue
+                interface, destination, _gateway, flags, _ref, _use, metric = fields[:7]
+                if destination != "00000000":
+                    continue
+                try:
+                    flags_value = int(flags, 16)
+                    metric_value = int(metric)
+                except ValueError:
+                    continue
+                if not flags_value & 0x1:  # RTF_UP
+                    continue
+                entries.append((metric_value, interface))
+    except OSError:
+        return []
+    entries.sort()
+    return [interface for _metric, interface in entries]
+
+
+def _usable_source_ip(ip):
+    """True quando `ip` serve como origem de uma SA nova."""
+    ip = (ip or "").strip()
+    if not ip or ip.startswith("127."):
+        return False
+    if not is_local_ipv4(ip):
+        return False
+    return not is_tunnel_vip(ip)
+
+
+def detect_local_ip(target_gw):
+    """
+    Descobre o IP local que deve falar com o Gateway VPN.
+
+    Duas armadilhas motivaram esta versão:
+
+    * Com o túnel já de pé e `remote_ts = 0.0.0.0/0`, o kernel roteia *tudo*
+      pelo túnel — inclusive a própria consulta ao Gateway. O truque de UDP
+      `getsockname()` então devolve o VIP do túnel (ex.: 192.0.2.12) e ele vira
+      `local_addrs`. Numa segunda tentativa isso é fatal: o endereço só existe
+      enquanto o túnel está de pé, e o IKE_SA_INIT sai de uma origem morta.
+    * Um endereço /32 é host, nunca rede: não pode ser origem.
+
+    Endereços nesses casos são descartados e a escolha cai para o IP primário
+    da interface com a rota default — que é por onde o túnel realmente sobe.
+    """
+    for target in (target_gw, "8.8.8.8"):
+        source = _udp_source_for(target)
+        if _usable_source_ip(source):
+            return source
+
+    for interface in _default_route_interfaces():
+        candidate = _interface_ipv4(interface)
+        if _usable_source_ip(candidate):
+            return candidate
+
+    # Último recurso: qualquer interface que tenha um endereço de rede.
+    try:
+        interfaces = socket.if_nameindex()
+    except OSError:  # pragma: no cover
+        interfaces = []
+    for _index, interface in interfaces:
+        candidate = _interface_ipv4(interface)
+        if _usable_source_ip(candidate):
+            return candidate
+
+    fallback = _udp_source_for(target_gw) or _udp_source_for("8.8.8.8")
+    if fallback:
+        return fallback
+    # Fora do Linux (sem ioctl) o truque de UDP é o único caminho: preserva o
+    # comportamento anterior de resolver o próprio hostname antes de desistir.
+    try:
+        resolved = socket.gethostbyname(socket.gethostname())
+        if resolved and not resolved.startswith("127."):
+            return resolved
+    except OSError:
+        pass
+    return "127.0.0.1"
 
 
 # ═══════════════════════════════════════════════════════════ descoberta
@@ -454,6 +640,56 @@ def _read_log_tail(path, lines=200, max_bytes=512_000):
         len(todas) - lines,
         "\n".join(todas[-lines:]),
     )
+
+
+LINUX_LOG_UNITS = ("strongswan.service", "strongswan-starter.service")
+LINUX_LOG_FILES = ("/var/log/syslog", "/var/log/daemon.log", "/var/log/messages")
+
+
+def _filter_engine_log(text):
+    """Mantém só as linhas que falam do charon/strongSwan/swanctl."""
+    selected = []
+    for line in (text or "").splitlines():
+        low = line.lower()
+        if "charon" in low or "strongswan" in low or "swanctl" in low:
+            selected.append(line)
+    return selected
+
+
+def linux_engine_log(runner, lines=200):
+    """
+    Últimas linhas do log do strongSwan/charon no Linux, via `journalctl`.
+
+    No Linux o stdout do `swanctl` não traz o notify do servidor
+    (AUTHENTICATION_FAILED, NO_PROPOSAL_CHOSEN, ID_MISMATCH): o motivo real só
+    existe no journal do charon. Sem isto o diagnóstico sai com centenas de KB
+    e nenhuma linha de erro — exatamente o que aconteceu em campo.
+
+    Não usa `sudo`: `journalctl` costuma ser legível pelo próprio usuário
+    (grupos `systemd-journal`/`adm`). Se não for, cai para os logs de texto e,
+    por fim, devolve "" para o chamador explicar a limitação.
+    """
+    attempts = (
+        [
+            "journalctl", "-u", LINUX_LOG_UNITS[0], "-u", LINUX_LOG_UNITS[1],
+            "-n", str(lines), "--no-pager", "-o", "short-iso",
+        ],
+        ["journalctl", "-t", "charon", "-t", "charon-systemd",
+         "-n", str(lines), "--no-pager", "-o", "short-iso"],
+    )
+    for argv in attempts:
+        result = runner(argv, timeout=20)
+        text = getattr(result, "output", "") or ""
+        if text.strip():
+            return "\n".join(text.splitlines()[-lines:])
+
+    for path in LINUX_LOG_FILES:
+        if not os.path.isfile(path):
+            continue
+        selected = _filter_engine_log(_read_log_tail(path, lines=4000))
+        if selected:
+            return "\n".join(selected[-lines:])
+    return ""
 
 
 def _ps_quote(value):
@@ -704,9 +940,18 @@ class VpnEngine:
         return Status(False, None, "", "plataforma nao suportada")
 
     def _connect_linux(self, settings):
+        gateway = settings.get("gateway", "").strip()
+        requested_ip = settings.get("local_ip", "").strip()
+        local_ip = sanitize_local_ip(requested_ip)
+        if requested_ip and not local_ip:
+            self._log(
+                "IP local '%s' nao existe nesta maquina (ou e um VIP de tunel /32); "
+                "deixando o strongSwan escolher a origem pela rota." % requested_ip
+            )
+
         conf = build_swanctl_conf(
-            gw=settings.get("gateway", "").strip(),
-            local_ip=settings.get("local_ip", "").strip(),
+            gw=gateway,
+            local_ip=local_ip,
             user=settings.get("user", "").strip(),
             pwd=settings.get("password", "").strip(),
             psk=settings.get("psk", "").strip(),
@@ -714,8 +959,38 @@ class VpnEngine:
         self._call(["sudo", "mkdir", "-p", "/etc/swanctl/conf.d"], timeout=20)
         self._call(["sudo", "tee", LINUX_CONF_FILE], input_text=conf, timeout=20)
         self._call(["sudo", "chmod", "600", LINUX_CONF_FILE], timeout=20)
-        self._call(["sudo", "swanctl", "--load-all"], timeout=40)
+
+        # Derruba SAs penduradas de tentativas anteriores ANTES de carregar a
+        # configuração nova (mesma razão do Windows, onde isto já existia).
+        # Uma tentativa interrompida no meio (timeout de 90s, fechar a janela)
+        # deixa meia SA viva: em campo foram vistas duas ao mesmo tempo, com
+        # identidades e `local_addrs` diferentes, somando retransmissões e
+        # tornando o --list-sas do diagnóstico ambíguo.
+        stale = self._call(
+            ["sudo", "swanctl", "--terminate", "--ike", CHILD_NAME], timeout=45
+        )
+        if stale.ok:
+            self._log("Encerrada SA pendurada de tentativa anterior.")
+        else:
+            self._log("Nao ha SA pendurada a encerrar (%s)." % (stale.output or "sem resposta"))
+
+        load = self._call(["sudo", "swanctl", "--load-all"], timeout=40)
         self._call(["sudo", "ip", "rule", "add", "lookup", "220", "pref", "220"], timeout=15)
+
+        # Guarda contra a falha silenciosa que já ocorreu em campo: `--load-all`
+        # retornava rc=0 sem carregar conexão nenhuma e o erro só aparecia no
+        # `--initiate` ("CHILD_SA config not found"), sem indicar o motivo.
+        # Só vale quando os dois comandos responderam: com o charon parado o
+        # `--list-conns` também falha e não se pode concluir nada.
+        listed = self._call(["sudo", "swanctl", "--list-conns"], timeout=30)
+        if load.returncode == 0 and listed.returncode == 0 and CHILD_NAME not in listed.output:
+            return Status(
+                False,
+                None,
+                (load.output + "\n" + listed.output).strip(),
+                "A configuracao nao foi carregada no motor (conexao '%s' ausente). "
+                "Diretorio esperado: /etc/swanctl/conf.d" % CHILD_NAME,
+            )
 
         if not os.path.exists("/var/run/charon.ctl"):
             self._log("Socket /var/run/charon.ctl ausente: iniciando o servico strongSwan.")
@@ -732,7 +1007,23 @@ class VpnEngine:
         status = self.status()
         if proc.returncode == 0 and status.connected:
             return Status(True, status.vip, "conectado", "")
-        return Status(False, None, clean, map_engine_error(clean))
+
+        error = map_engine_error(clean)
+        # O motivo real (AUTHENTICATION_FAILED, NO_PROPOSAL_CHOSEN, ID_MISMATCH)
+        # não aparece no stdout do swanctl: no Linux ele só existe no journal do
+        # charon. Aponta o caminho e já anexa as últimas linhas.
+        log_tail = self._linux_engine_log(lines=40)
+        if log_tail:
+            error += " | Log do motor: " + " | ".join(log_tail.splitlines()[-3:])[:300]
+        else:
+            error += " | Log do motor: journalctl -u strongswan -n 200 (sem permissao de leitura ou sem registros)"
+        return Status(False, None, clean, error)
+
+    def _linux_engine_log(self, lines=200):
+        """Log do charon/strongSwan no Linux (journal). Ver `linux_engine_log`."""
+        return linux_engine_log(
+            lambda argv, timeout: self._call(argv, timeout=timeout), lines=lines
+        )
 
     def _connect_windows(self, settings):
         available, detail = self.availability()
@@ -1167,4 +1458,29 @@ class VpnEngine:
             info["swanctl --version"] = result.output
             result = self._call(["ip", "-brief", "address"], timeout=20)
             info["ip -brief address"] = result.output
+            result = self._call(["ip", "route"], timeout=20)
+            info["ip route"] = result.output
+            result = self._call(["systemctl", "is-active", "strongswan.service"], timeout=15)
+            info["systemctl is-active strongswan.service"] = result.output or "(sem resposta)"
+            # Sem isto o diagnóstico no Linux sai com centenas de KB e nenhuma
+            # linha de erro: o motivo real fica no journal do charon.
+            info["log do motor (strongSwan/charon)"] = (
+                self._linux_engine_log()
+                or "(vazio: sem permissao para ler o journal ou sem registros)"
+            )
+            for label, argv in (
+                ("swanctl --list-sas", ["sudo", "swanctl", "--list-sas"]),
+                ("swanctl --list-conns", ["sudo", "swanctl", "--list-conns"]),
+            ):
+                result = self._call(argv, timeout=20)
+                info[label] = result.output or "(sem resposta)"
+            try:
+                with open(LINUX_CONF_FILE, "r", encoding="utf-8", errors="replace") as handle:
+                    info["conteudo de %s" % os.path.basename(LINUX_CONF_FILE)] = redact_conf_text(
+                        handle.read()
+                    )
+            except OSError as exc:
+                info["conteudo de %s" % os.path.basename(LINUX_CONF_FILE)] = (
+                    "nao foi possivel ler: %s" % exc
+                )
         return info

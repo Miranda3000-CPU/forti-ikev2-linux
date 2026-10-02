@@ -9,7 +9,7 @@
 
 [Setup]
 AppName=FortiClient VPN - DTIC
-AppVersion=2.1.2
+AppVersion=2.1.3
 AppPublisher=Jeiel Miranda (DTIC)
 DefaultDirName={autopf}\FortiClient-VPN
 DefaultGroupName=FortiClient VPN

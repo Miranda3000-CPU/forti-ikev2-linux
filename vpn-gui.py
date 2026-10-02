@@ -10,7 +10,6 @@ No Windows os binários são vendorizados em `vendor/windows/`.
 
 import argparse
 import os
-import socket
 import sys
 import threading
 import time
@@ -22,7 +21,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 import vpn_config as cfgstore
-from vpn_engine import VpnEngine, Status
+import vpn_engine
+from vpn_engine import VpnEngine, Status, sanitize_local_ip
 
 IS_WINDOWS = sys.platform == "win32"
 IS_LINUX = sys.platform.startswith("linux")
@@ -71,39 +71,14 @@ def get_resource_path(relative_path):
 
 def detect_local_ip(target_gw=cfgstore.DEFAULT_GATEWAY):
     """
-    Detecta o IP local roteado para o Gateway VPN, de forma nativa, sem
-    depender de comandos de shell (ip/ifconfig).
+    IP local que deve falar com o Gateway.
+
+    A implementação vive no motor (`vpn_engine.detect_local_ip`) porque deixou
+    de ser um simples `getsockname()`: com o túnel de pé o kernel roteia tudo
+    por ele e a consulta devolvia o VIP do túnel (ex.: 192.0.2.12), que não
+    serve como origem de uma SA nova.
     """
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(0.5)
-        sock.connect((target_gw, 500))
-        ip = sock.getsockname()[0]
-        sock.close()
-        if ip and not ip.startswith("127."):
-            return ip
-    except Exception:
-        pass
-
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(0.5)
-        sock.connect(("8.8.8.8", 80))
-        ip = sock.getsockname()[0]
-        sock.close()
-        if ip and not ip.startswith("127."):
-            return ip
-    except Exception:
-        pass
-
-    try:
-        ip = socket.gethostbyname(socket.gethostname())
-        if ip and not ip.startswith("127."):
-            return ip
-    except Exception:
-        pass
-
-    return "127.0.0.1"
+    return vpn_engine.detect_local_ip(target_gw)
 
 
 def make_round_image(pil_img, size):
@@ -583,7 +558,15 @@ class VpnApp:
         self.entry_gateway.delete(0, tk.END)
         self.entry_gateway.insert(0, gateway)
 
-        saved_manual_ip = cfg.get("custom_local_ip")
+        saved_manual_ip = sanitize_local_ip(cfg.get("custom_local_ip"))
+        if cfg.get("custom_local_ip") and not saved_manual_ip:
+            # Configuração migrada de outro PC: `custom_local_ip` apontava para
+            # o VIP do túnel daquela máquina (ex.: 192.0.2.12). Aqui ele não
+            # existe e viraria um `local_addrs` morto — ignora e volta ao auto.
+            self.log(
+                "IP local salvo (%s) nao existe nesta maquina; usando o detectado (%s)."
+                % (cfg.get("custom_local_ip"), detected)
+            )
         if saved_manual_ip:
             self.entry_local_ip.delete(0, tk.END)
             self.entry_local_ip.insert(0, saved_manual_ip)
@@ -863,7 +846,7 @@ def _cli_settings(store):
     gateway = cfg.get("gateway") or cfgstore.DEFAULT_GATEWAY
     return {
         "gateway": gateway,
-        "local_ip": cfg.get("custom_local_ip") or detect_local_ip(gateway),
+        "local_ip": sanitize_local_ip(cfg.get("custom_local_ip")) or detect_local_ip(gateway),
         "user": cfg.get("user", ""),
         "password": cfg.get("password", ""),
         "psk": cfg.get("psk", ""),

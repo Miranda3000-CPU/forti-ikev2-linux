@@ -230,7 +230,30 @@ python3 -m unittest discover -s tests -v
 | "Falha de autenticação"              | Usuário/senha, ou PSK incorreta.                  |
 | "Tempo esgotado"                     | Gateway inacessível ou UDP 500/4500 bloqueado.    |
 | "CHILD_SA config 'forticlient' not found" | O swanctl não encontrou o `conf.d` — ver abaixo. |
+| "A configuração não foi carregada no motor" | `--load-all` respondeu rc=0 sem carregar nada — veja o log do motor. |
+| Só conecta no PC onde foi configurado     | O IP local salvo era de outra máquina: limpe o campo **IP local** (o app volta a detectar e ignora endereço que não exista aqui). |
 | Status fica "DESCONECTADO" conectado | Envie o `--diagnose`; veja `swanctl --list-sas`.  |
+
+### Onde está o log do motor (Linux)
+
+O `app.log` mostra o que **o aplicativo** fez; o motivo real de uma falha de IKE
+está no journal do `charon`:
+
+```bash
+journalctl -u strongswan -n 200 --no-pager
+```
+
+O `diagnostico-<data>.zip` já anexa essas linhas como
+`log do motor (strongSwan/charon)`, junto de `ip route`, `swanctl --list-sas`,
+`swanctl --list-conns` e do `swanctl.conf` (segredos mascarados). Na falha de
+conexão a mensagem traz as últimas linhas do motor — ou o comando acima, quando
+o journal não é legível pelo usuário.
+
+O Linux também encerra SAs penduradas (`swanctl --terminate --ike forticlient`)
+antes de carregar a configuração, e omite o `local_addrs` quando o endereço
+escolhido não é uma origem válida (IP virtual do túnel `/32`, ou IP de outra
+máquina vindo de um `config.json` copiado), deixando o strongSwan escolher pela
+rota.
 
 ### Onde está o log do motor (Windows)
 

@@ -1,3 +1,14 @@
+forticlient-vpn (2.1.3) unstable; urgency=medium
+
+  * Corrige o local_addrs herdado de outro PC: o IP virtual do túnel (/32) e
+    endereços que não existem na máquina deixam de ser usados como origem.
+  * Encerra SAs penduradas no Linux antes do --load-all/--initiate, como já
+    era feito no Windows.
+  * Anexa o journal do strongSwan (charon) ao diagnóstico e à mensagem de erro
+    no Linux; sem isso uma falha de IKE não tinha nenhuma linha de motivo.
+
+ -- Jeiel Miranda <jeielmiranda@duck.com>  Fri, 02 Oct 2026 00:00:00 -0300
+
 forticlient-vpn (2.1.2) unstable; urgency=medium
 
   * Primeira versão publicada em repositório público.
