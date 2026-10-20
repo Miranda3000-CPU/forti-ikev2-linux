@@ -27,8 +27,19 @@ IS_LINUX = sys.platform.startswith("linux")
 
 APP_DIR_NAME = "FortiClientVPN"
 LOGGER_NAME = "forticlient"
-DEFAULT_GATEWAY = "198.51.100.100"
+# O default fica VAZIO de propósito. Um gateway preenchido fazia o app mandar
+# IKE_SA_INIT para o IP de documentação (RFC 5737) sem avisar: como ninguém
+# responde, o charon retransmite até o timeout de 90s e a tela fica em
+# "Conectando..." sem nenhum erro — a falha que só aparecia "na outra
+# máquina", porque no PC de origem o config.json trazia o IP real.
+DEFAULT_GATEWAY = ""
+EXAMPLE_GATEWAY = "198.51.100.100"
 SECRET_KEYS = ("password", "psk")
+
+
+def is_example_gateway(value):
+    """True se `value` ainda for o IP de exemplo (faixa 198.51.100.0/24)."""
+    return str(value or "").strip().startswith("198.51.100.")
 
 
 # ─────────────────────────────────────────────────────────────── diretórios
@@ -191,6 +202,8 @@ DEFAULT_CONFIG = {
     "custom_local_ip": "",
     "engine": "auto",
     "vip_strategy": "auto",
+    "crypto_profile": "auto",
+    "auth_method": "eap-mschapv2",
     "restore_ikext_on_exit": True,
 }
 

@@ -94,6 +94,14 @@ class TestSwanctlConf(unittest.TestCase):
         self.assertIn('secret = "p\\"s\\"k"', conf)
         self.assertIn('secret = "se\\"nha"', conf)
 
+    def test_special_characters_in_user_and_secrets(self):
+        """Caracteres especiais como #, @, \\, $, %, aspas e espacos devem ser aceitos e aspeados."""
+        conf = build_swanctl_conf("gw", "1.2.3.4", "DOMINIO\\user#1@email.com", 'sen#ha$123"xyz', "psk#key")
+        self.assertIn('id       = "DOMINIO\\\\user#1@email.com"', conf)
+        self.assertIn('eap_id   = "DOMINIO\\\\user#1@email.com"', conf)
+        self.assertIn('secret = "sen#ha$123\\"xyz"', conf)
+        self.assertIn('secret = "psk#key"', conf)
+
 
 class TestParsing(unittest.TestCase):
     def test_established_with_vip(self):

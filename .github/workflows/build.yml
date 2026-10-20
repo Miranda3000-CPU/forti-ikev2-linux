@@ -1,14 +1,19 @@
 name: Build e release
 
-# Gera o binário de distribuição (Linux .deb) e publica a GitHub Release em
-# tags v*. O instalador Windows (.exe) é apenas EXPERIMENTAL: compila para
-# manutenção/revisão, não é publicado na Release enquanto a estabilidade não
-# for confirmada.
+# Gera os binários de distribuição e publica a GitHub Release em tags v*.
+#
+# A release é propositalmente enxuta — só o que o usuário final precisa:
+#   FortiClient-VPN        executável único de Linux
+#   install-linux.sh       instala dependências, sudoers e atalho do menu
+#   FortiClient-VPN.exe    executável único de Windows (motor embutido)
+#   README-DISTRIBUICAO    publicado como README.md
+#   strongswan-*.tar.bz2   fonte do motor embutido no .exe (obrigação GPLv2)
+#   SHA256SUMS             checksums
 #
 # Fluxo:
 #   push/PR   -> testes + .deb (artefatos do Actions expiram em 90 dias;
 #                para distribuir, use a Release de uma tag)
-#   tag v*    -> os mesmos artefatos, publicados como Release
+#   tag v*    -> os binários únicos, publicados como Release
 
 on:
   # Sem `paths`: filtro de caminho também é avaliado em push de tag, e uma tag
@@ -24,13 +29,13 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
-# Padrão: só leitura. O job de release amplia paracontents: write.
+# Padrão: só leitura. O job de release amplia para contents: write.
 permissions:
   contents: read
 
 env:
-  # StrongSwan embarcado no Windows é GPLv2: a release precisa publicar o fonte
-  # correspondente. Manter em um só lugar, junto do NOTICE.
+  # strongSwan embarcado no .exe do Windows é GPLv2: a release precisa publicar
+  # o fonte correspondente. Manter em um só lugar, junto do NOTICE.
   STRONGSWAN_VERSION: "6.1.0"
   STRONGSWAN_SHA256: "fe6c97481298767213cfc2e9a1da29fdd8018d481ff4cb9cf0283099654f20d4"
 
@@ -72,7 +77,10 @@ jobs:
         run: python3 -m unittest discover -s tests -v
 
   deb:
-    name: Pacote Linux (.deb)
+    name: Pacote Linux (.deb) [apenas CI]
+    # O .deb continua sendo um caminho de instalação válido e é bom mantê-lo
+    # compilando, mas NÃO é mais publicado na release: a distribuição passou a
+    # ser o executável único + install-linux.sh.
     runs-on: ubuntu-latest
     needs: testes
     steps:
@@ -94,15 +102,38 @@ jobs:
           path: dist/*.deb
           if-no-files-found: error
 
+  linux:
+    name: Executável único (Linux)
+    runs-on: ubuntu-latest
+    needs: testes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependências do empacotamento
+        run: pip install pyinstaller pillow
+      - name: Gerar o executável
+        run: ./build/build_linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-binario
+          path: dist/FortiClient-VPN
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: install-linux
+          path: install-linux.sh
+          if-no-files-found: error
+
   windows:
-    name: Instalador Windows (.exe) [experimental]
-    # EXPERIMENTAL: compila para garantir que a cadeia PyInstaller + Inno ainda
-    # funciona, mas NÃO publica nada. Falha aqui não bloqueia o .deb (o
-    # continue-on-error marca o job como "se sucesso", só informativo).
+    name: Executável único (Windows)
+    # O .exe é autocontido: o motor strongSwan sai embutido no bundle e é
+    # extraído para %LOCALAPPDATA% na primeira execução. Falha aqui bloqueia a
+    # release — sem o .exe não há o que publicar para o Windows.
     if: github.event_name != 'pull_request'
     runs-on: windows-latest
     needs: testes
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -138,30 +169,36 @@ jobs:
       - name: Versão e commit no pacote
         run: python build/gen_build_info.py
 
+      - name: Conferir o motor vendorizado
+        # O spec só embute vendor/windows se a pasta existir: sem esta checagem
+        # um build sem o motor sairia silenciosamente e o .exe falharia em
+        # campo com "Motor strongSwan não encontrado".
+        shell: pwsh
+        run: |
+          foreach ($exe in @("charon-svc.exe", "swanctl.exe")) {
+            if (-not (Test-Path "vendor\windows\$exe")) { throw "vendor\windows\$exe ausente" }
+          }
+
       - name: Gerar o executável
         run: pyinstaller --noconfirm --distpath build/output --workpath build/output/work build/FortiClient-VPN.spec
 
-      - name: Instalar o Inno Setup
-        run: choco install innosetup -y --no-progress
-
-      - name: Gerar o instalador
+      - name: Smoke test do executável
+        # Garante que o bundle realmente extrai e roda (e não só que o
+        # PyInstaller terminou).
         shell: pwsh
         run: |
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) { throw "ISCC.exe não encontrado em $iscc" }
-          & $iscc "build\FortiClient-VPN-Setup.iss"
-          if ($LASTEXITCODE -ne 0) { throw "ISCC falhou com código $LASTEXITCODE" }
+          & "build\output\FortiClient-VPN.exe" --help
+          if ($LASTEXITCODE -ne 0) { throw "--help falhou com código $LASTEXITCODE" }
 
-      - name: Não publicar (experimental)
-        shell: pwsh
-        run: |
-          Get-ChildItem dist\*\* -ErrorAction SilentlyContinue | Out-Null
-          Write-Host "Build Windows é experimental e não é publicado na Release."
-          Write-Host "O instalador gerado está em dist\, mas nenhum artefato é anexado ao Actions."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-binario
+          path: build/output/FortiClient-VPN.exe
+          if-no-files-found: error
 
   release:
     name: Publicar a release
-    needs: [deb]
+    needs: [linux, windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -183,6 +220,26 @@ jobs:
           path: release
           merge-multiple: true
 
+      - name: Preparar a pasta da release
+        run: |
+          # Só o que o usuário final precisa, e nada mais: nenhum .deb, nenhum
+          # instalador, nenhum artefato de CI.
+          cd release
+          # O README do repositório é voltado a quem desenvolve; a release leva
+          # o simplificado, focado em instalar e usar.
+          cp "$GITHUB_WORKSPACE/README-DISTRIBUICAO.md" README.md
+          ls -lh
+
+      - name: Baixar o fonte do strongSwan (GPLv2)
+        # O .exe do Windows embarca o motor strongSwan (GPLv2). Publicar o
+        # binário sem o fonte correspondente viola a licença — por isso o
+        # tarball acompanha a release, com o hash conferido contra o NOTICE.
+        run: |
+          version="${STRONGSWAN_VERSION}"
+          curl -fL -o "release/strongswan-${version}.tar.bz2" \
+            "https://download.strongswan.org/strongswan-${version}.tar.bz2"
+          echo "${STRONGSWAN_SHA256}  release/strongswan-${version}.tar.bz2" | sha256sum -c -
+
       - name: Checksums
         run: |
           cd release
@@ -195,18 +252,24 @@ jobs:
         run: |
           version="$(cat VERSION)"
           {
-            echo "FortiClient VPN $version (DTIC) — pacote Linux."
+            echo "FortiClient VPN $version (DTIC) — cliente VPN IKEv2 para FortiGate."
             echo
             echo "| Sistema | Arquivo |"
             echo "| --- | --- |"
-            echo "| Debian / Ubuntu | \`forticlient-vpn_${version}_all.deb\` |"
+            echo "| Linux | \`FortiClient-VPN\` + \`install-linux.sh\` |"
+            echo "| Windows | \`FortiClient-VPN.exe\` |"
             echo
-            echo "Instale com: \`sudo apt install ./forticlient-vpn_${version}_all.deb\`"
+            echo "**Linux:** \`chmod +x FortiClient-VPN install-linux.sh && ./install-linux.sh\`"
+            echo "(instala o strongSwan, as regras do sudoers e o atalho do menu)."
             echo
-            echo "**Windows: experimental.** O instalador ainda não é distribuído"
-            echo "oficialmente. Para testar, compile: \`./build/preparar_instalador_windows.sh\`."
+            echo "**Windows:** execute \`FortiClient-VPN.exe\`. Na primeira execução o motor"
+            echo "é extraído para \`%LOCALAPPDATA%\\FortiClientVPN\\engine\`. Sem assinatura de"
+            echo "código, o SmartScreen avisa: **Mais informações → Executar assim mesmo**."
             echo
-            echo "Verifique o arquivo com \`SHA256SUMS\`."
+            echo "Confira a integridade com \`SHA256SUMS\`."
+            echo
+            echo "O .exe do Windows embarca o motor strongSwan (GPLv2); o fonte correspondente"
+            echo "é o \`strongswan-${STRONGSWAN_VERSION}.tar.bz2\` desta release."
           } > notas.md
           gh release create "$GITHUB_REF_NAME" release/* \
             --title "FortiClient VPN $version" \

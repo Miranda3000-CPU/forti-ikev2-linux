@@ -101,7 +101,7 @@ class TestSegredos(unittest.TestCase):
 
     def test_ips_internos_nao_vazam(self):
         """Endereços reais foram trocados por faixas de documentação (RFC 5737)."""
-        for path in ("vpn_config.py", "vpn-gui.py", "config/forti.conf.example",
+        for path in ("vpn_config.py", "vpn-gui.py",
                      "tests/test_engine.py", "README.md", "debian/control",
                      "CHANGELOG.md", "tests/test_distribution.py"):
             if not exists(path):
@@ -111,9 +111,8 @@ class TestSegredos(unittest.TestCase):
                 self.assertNotIn(ip, conteudo, "%s ainda traz o IP interno" % path)
 
     def test_exemplos_usam_faixa_de_documentacao(self):
-        """O default do gateway e o modelo de configuração usam faixas RFC 5737."""
+        """O default do gateway usa faixas RFC 5737."""
         self.assertIn(IPS_DE_EXEMPLO[0], read("vpn_config.py"))
-        self.assertIn(IPS_DE_EXEMPLO[0], read("config/forti.conf.example"))
 
 
 class TestVersao(unittest.TestCase):
@@ -301,21 +300,52 @@ class TestLicenca(unittest.TestCase):
         self.assertIn("três anos", oferta)
         self.assertIn("§3(b)", oferta)
 
-    def test_windows_experimental_nao_publicado(self):
-        """Windows ainda não é distruibído: a release só leva o .deb."""
+    def test_release_so_leva_o_que_o_usuario_final_precisa(self):
+        """Release enxuta: binário Linux, .exe Windows, README, fonte GPLv2 e checksums."""
         try:
             import yaml
         except ImportError:
             self.skipTest("PyYAML ausente (instale python3-yaml para checar o workflow)")
         workflow = yaml.safe_load(read(WORKFLOW))
         windows = workflow["jobs"]["windows"]
-        self.assertTrue(windows.get("continue-on-error", False), "Windows deve ser experimental")
-        nomes = [str(step.get("name", "")) for step in windows["steps"]]
+        # O .exe é autocontido e é o que se distribui: o job precisa publicar o
+        # artefato e não pode ser tratado como experimental.
         self.assertFalse(
-            any("upload-artifact" in nome or "Publicar" in nome for nome in nomes),
-            "job experimental não pode publicar artefato",
+            windows.get("continue-on-error", False),
+            "Windows é distribuído: o job não pode ser continue-on-error",
         )
-        self.assertEqual(workflow["jobs"]["release"]["needs"], ["deb"])
+        nomes = [str(step.get("name", "")) + str(step.get("uses", "")) for step in windows["steps"]]
+        self.assertTrue(
+            any("upload-artifact" in nome for nome in nomes),
+            "o .exe precisa subir como artefato para chegar na release",
+        )
+        # A release depende dos dois binários e de nada mais: nem do .deb, que
+        # segue compilando no CI mas não é mais distribuído.
+        self.assertEqual(workflow["jobs"]["release"]["needs"], ["linux", "windows"])
+
+    def test_release_publica_os_tres_artefatos_e_o_fonte_gplv2(self):
+        """O usuário final recebe: .exe Windows, binário Linux, README e o tarball."""
+        content = read(WORKFLOW)
+        # Binário de Linux e o script que instala sudoers/atalho.
+        self.assertIn("linux-binario", content)
+        self.assertIn("install-linux.sh", content)
+        # Windows autocontido, gerado pelo mesmo spec.
+        self.assertIn("windows-binario", content)
+        self.assertIn("FortiClient-VPN.exe", content)
+        # O README do repo é voltado a quem desenvolve; a release leva o simplificado.
+        self.assertIn("README-DISTRIBUICAO.md", content)
+        # GPLv2: publicar o .exe exige publicar o fonte do motor embarcado.
+        self.assertIn("strongswan-", content)
+        self.assertIn("sha256sum -c", content)
+        # E nada do que ficou para trás.
+        self.assertNotIn("FortiClient-VPN-Setup.exe", content)
+        self.assertNotIn("Inno Setup", content)
+
+    def test_spec_so_embutte_o_motor_do_windows(self):
+        """No Linux o motor é o do sistema: embarcar os .exe seria peso morto."""
+        spec = read("build/FortiClient-VPN.spec")
+        self.assertIn("vendor", spec)
+        self.assertIn("win32", spec)
 
     def test_se_publicar_exe_exige_tarball_do_strongswan(self):
         """GPLv2 §2: nunca redistança o instalador sem o fonte correspondente."""

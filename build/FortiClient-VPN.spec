@@ -7,6 +7,24 @@ ROOT_DIR = os.path.abspath(os.path.join(SPEC_DIR, '..'))
 
 block_cipher = None
 
+# Motor strongSwan para Windows (charon-svc.exe, swanctl.exe, DLLs, conf).
+#
+# Vem como `datas` e não como `binaries`: são executáveis standalone do MinGW
+# com as próprias DLLs ao lado, e o PyInstaller não deve tentar analisar suas
+# dependências — ele as resolveria contra as libs do build e quebraria o
+# pacote. Como `datas`, a pasta sai inteira e o aplicativo a descompacta num
+# diretório estável na primeira execução (ver materialize_bundled_engine).
+#
+# Só entra no build de Windows: no Linux o motor é o strongSwan do sistema e
+# estes .exe seriam ~12 MB de peso morto dentro do binário.
+ENGINE_DIR = os.path.join(ROOT_DIR, 'vendor', 'windows')
+engine_datas = []
+if sys.platform == 'win32' and os.path.isdir(ENGINE_DIR):
+    for _nome in sorted(os.listdir(ENGINE_DIR)):
+        _caminho = os.path.join(ENGINE_DIR, _nome)
+        if os.path.isfile(_caminho):
+            engine_datas.append((_caminho, os.path.join('vendor', 'windows')))
+
 a = Analysis(
     [os.path.join(ROOT_DIR, 'vpn-gui.py')],
     pathex=[ROOT_DIR],
@@ -15,7 +33,7 @@ a = Analysis(
         (os.path.join(ROOT_DIR, 'assets', 'icon.png'), 'assets'),
         (os.path.join(ROOT_DIR, 'assets', 'icon.ico'), 'assets'),
         (os.path.join(ROOT_DIR, 'assets', 'dtic-logo-whasapp.jpeg'), 'assets')
-    ],
+    ] + engine_datas,
     hiddenimports=['PIL', 'PIL._tkinter_finder'],
     hookspath=[],
     hooksconfig={},

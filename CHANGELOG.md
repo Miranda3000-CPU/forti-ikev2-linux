@@ -7,6 +7,31 @@ segue [SemVer](https://semver.org/lang/pt-BR/).
 A versão é declarada em [`VERSION`](VERSION) e propagada para o `.deb`, para o
 instalador Windows e para o executável.
 
+## [2.1.4] — 2026-10-08
+
+### Corrigido
+
+- **Sem gateway salvo, o app conectava num IP de exemplo e ficava pendurado.**
+  `DEFAULT_GATEWAY` era `198.51.100.100` (faixa de documentação RFC 5737): numa
+  máquina sem `config.json` — ou com o campo **Gateway** vazio, ou gravado com o
+  placeholder — GUI e CLI preenchiam o valor silenciosamente e o `IKE_SA_INIT`
+  saía para aquele endereço. Como ninguém responde, o charon retransmitia até o
+  timeout de 90s e a tela ficava em "Conectando..." sem nenhuma mensagem. O
+  default agora é vazio (caindo no aviso "Informe o Gateway VPN.") e GUI e CLI
+  recusam a faixa `198.51.100.0/24` com aviso explícito, antes de qualquer
+  tentativa. Aparecia só "na outra máquina" porque no PC de origem o
+  `config.json` trazia o IP real.
+
+### Adicionado
+
+- **`build/diag_rede.sh`**: coleta de diagnóstico de rede somente leitura —
+  rota, vizinhança, retorno de tráfego, firewall local, versões,
+  `--list-conns` e o fim do `app.log` — para comparar uma máquina que não
+  conecta com uma que conecta numa única execução. Com `--captura` roda 30s de
+  `tcpdump` em UDP 500/4500/**ICMP** (sem `icmp` no filtro, um *destination
+  unreachable* vindo do roteador passava despercebido e o diagnóstico lia
+  "nada voltou").
+
 ## [2.1.3] — 2026-10-02
 
 ### Corrigido

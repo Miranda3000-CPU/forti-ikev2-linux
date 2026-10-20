@@ -35,11 +35,10 @@ fi
 
 # ─────────────────────────────────────────── arquivos
 echo -e "${YELLOW}Copiando arquivos...${RESET}"
-sudo mkdir -p "$SHARE_DIR/assets" "$SHARE_DIR/config"
+sudo mkdir -p "$SHARE_DIR/assets"
 sudo cp -r "$DIR/assets/." "$SHARE_DIR/assets/"
 sudo cp "$DIR/vpn-gui.py" "$DIR/vpn_engine.py" "$DIR/vpn_config.py" "$DIR/build_info.py" "$SHARE_DIR/"
 sudo cp "$DIR/iniciar_linux.sh" "$SHARE_DIR/iniciar_linux.sh"
-sudo cp "$DIR/config/forti.conf.example" "$SHARE_DIR/config/" 2>/dev/null || true
 sudo chmod +x "$SHARE_DIR/vpn-gui.py" "$SHARE_DIR/iniciar_linux.sh"
 sudo chmod 644 "$SHARE_DIR/vpn_engine.py" "$SHARE_DIR/vpn_config.py" "$SHARE_DIR/build_info.py"
 

@@ -8,8 +8,8 @@
 ; permite IKEv2 + PSK + EAP-MSCHAPv2 sem depender do FortiClient.
 
 [Setup]
-AppName=FortiClient VPN - DTIC
-AppVersion=2.1.3
+AppName=FortiClient VPN - DTIC (Experimental)
+AppVersion=2.1.4
 AppPublisher=Jeiel Miranda (DTIC)
 DefaultDirName={autopf}\FortiClient-VPN
 DefaultGroupName=FortiClient VPN

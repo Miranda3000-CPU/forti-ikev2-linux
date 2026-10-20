@@ -20,12 +20,33 @@ class TestFortiClientVPN(unittest.TestCase):
         importlib.import_module("vpn_engine")
         importlib.import_module("vpn_config")
 
-    # ------------------------------------------------------------- arquivos
-    def test_config_example_exists(self):
-        self.assertTrue(os.path.exists(os.path.join(BASE_DIR, "config", "forti.conf.example")))
+    # -------------------------------------------------------------- gateway
+    def test_default_gateway_vazio(self):
+        """Um default preenchido conectava num IP de documentação e pendurava 90s."""
+        vpn_config = importlib.import_module("vpn_config")
+        self.assertEqual(vpn_config.DEFAULT_GATEWAY, "")
+        self.assertEqual(vpn_config.DEFAULT_CONFIG["gateway"], "")
 
-    def test_config_example_has_psk(self):
-        self.assertIn("secrets", read("config/forti.conf.example"))
+    def test_is_example_gateway(self):
+        vpn_config = importlib.import_module("vpn_config")
+        self.assertTrue(vpn_config.is_example_gateway("198.51.100.100"))
+        self.assertTrue(vpn_config.is_example_gateway(" 198.51.100.7 "))
+        self.assertFalse(vpn_config.is_example_gateway("10.55.1.100"))
+        self.assertFalse(vpn_config.is_example_gateway("198.51.101.100"))
+        self.assertFalse(vpn_config.is_example_gateway(""))
+        self.assertFalse(vpn_config.is_example_gateway(None))
+
+    def test_gui_e_cli_bloqueiam_gateway_de_exemplo(self):
+        """GUI e CLI precisam recusar o placeholder antes de gastar os 90s."""
+        content = read("vpn-gui.py")
+        self.assertGreaterEqual(content.count("is_example_gateway("), 2)
+        # nenhum caminho pode preencher o gateway silenciosamente com o default
+        self.assertNotIn("or cfgstore.DEFAULT_GATEWAY", content)
+
+    # ------------------------------------------------------------- arquivos
+    def test_config_example_does_not_exist(self):
+        """Não deve distribuir ou manter arquivos .example; configuração é preenchida na UI."""
+        self.assertFalse(os.path.exists(os.path.join(BASE_DIR, "config", "forti.conf.example")))
 
     def test_icon_files_exist(self):
         self.assertTrue(os.path.exists(os.path.join(BASE_DIR, "assets", "icon.png")))
@@ -86,15 +107,17 @@ class TestFortiClientVPN(unittest.TestCase):
         self.assertIn("ISCC", content)
         self.assertIn("wine", content)
 
-    def test_ci_builds_the_installer(self):
-        """Sem build local: o CI gera o instalador e publica como artefato."""
+    def test_ci_builds_the_single_file_executables(self):
+        """Sem build local: o CI gera os binários únicos e publica como artefato."""
         path = os.path.join(BASE_DIR, ".github", "workflows", "build.yml")
         self.assertTrue(os.path.exists(path), "workflow .github/workflows/build.yml ausente")
         content = read(".github/workflows/build.yml")
         self.assertIn("msys2", content.lower())
-        self.assertIn("ISCC", content)
         self.assertIn("upload-artifact", content)
         self.assertIn("windows-latest", content)
+        # O distribuído é o executável único, não o instalador do Inno Setup.
+        self.assertIn("FortiClient-VPN.exe", content)
+        self.assertNotIn("ISCC", content)
 
     # -------------------------------------------------------------- motor
     def test_no_native_windows_vpn_code(self):

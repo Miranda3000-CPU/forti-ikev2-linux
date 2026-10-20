@@ -26,7 +26,7 @@ import tempfile
 import time
 from collections import namedtuple
 
-from vpn_config import config_dir, ensure_dir, get_logger
+from vpn_config import APP_DIR_NAME, config_dir, ensure_dir, get_logger
 
 try:
     import fcntl
@@ -49,29 +49,92 @@ IKE_PORTS = (500, 4500)
 
 Status = namedtuple("Status", "connected vip detail error")
 
-# Propostas idênticas às validadas com o FortiGate no Linux.
-IKE_PROPOSALS = (
-    "aes256-sha256-modp8192, aes256-sha256-modp4096, aes128-sha256-modp4096, "
-    "aes256-sha256-modp2048, aes256-sha1-modp2048, aes128-sha256-modp2048"
-)
-ESP_PROPOSALS = (
-    "aes256-sha256-modp8192, aes256-sha1-modp8192, aes128-sha256-modp8192, "
-    "aes256-sha256, aes128-sha256"
-)
+# Perfis de Criptografia suportados pelo FortiGate (FortiOS IKEv2 / IPsec)
+CRYPTO_PROFILES = {
+    "auto": {
+        "name": "Automático (Padrão FortiGate)",
+        "desc": "Negociação flexível com cifras FortiGate recomendadas",
+        "ike": (
+            "aes256-sha256-modp2048, aes128-sha256-modp2048, "
+            "aes256-sha256-modp14, aes128-sha256-modp14, "
+            "aes256-sha256-modp8192, aes256-sha256-modp4096, aes128-sha256-modp4096, "
+            "aes256-sha1-modp2048, aes128-sha1-modp2048"
+        ),
+        "esp": (
+            "aes256-sha256-modp2048, aes128-sha256-modp2048, "
+            "aes256-sha256-modp8192, aes256-sha1-modp8192, aes128-sha256-modp8192, "
+            "aes256-sha256, aes128-sha256, aes256-sha1, aes128-sha1"
+        ),
+    },
+    "high": {
+        "name": "Alta Segurança (MODP 8192 / 4096)",
+        "desc": "Criptografia reforçada (DH Groups 18 e 16)",
+        "ike": "aes256-sha256-modp8192, aes256-sha256-modp4096, aes128-sha256-modp4096, aes256-sha256-modp2048",
+        "esp": "aes256-sha256-modp8192, aes256-sha1-modp8192, aes256-sha256",
+    },
+    "standard": {
+        "name": "Padrão Corporativo (DH Group 14 - MODP 2048)",
+        "desc": "Configuração mais comum em FortiGate corporativo",
+        "ike": "aes256-sha256-modp2048, aes128-sha256-modp2048",
+        "esp": "aes256-sha256-modp2048, aes256-sha256, aes128-sha256",
+    },
+    "modern": {
+        "name": "Moderno (Curvas Elípticas ECP / GCM)",
+        "desc": "Desempenho com AES-GCM e ECP256/ECP384",
+        "ike": "aes256gcm128-ecp256, aes128gcm128-ecp256, aes256-sha384-ecp384, aes256-sha256-ecp256, aes256-sha256-modp2048",
+        "esp": "aes256gcm128, aes128gcm128, aes256-sha256, aes128-sha256",
+    },
+    "legacy": {
+        "name": "Compatibilidade Ampla (Legado DH2/DH5/SHA-1)",
+        "desc": "Para FortiOS com suporte a túneis legados",
+        "ike": "aes256-sha256-modp2048, aes256-sha1-modp2048, aes128-sha1-modp2048, aes256-sha1-modp1536, aes256-sha1-modp1024, 3des-sha1-modp1024",
+        "esp": "aes256-sha256, aes256-sha1, aes128-sha1, 3des-sha1",
+    },
+}
+
+# Propostas padrão compatíveis
+IKE_PROPOSALS = CRYPTO_PROFILES["auto"]["ike"]
+ESP_PROPOSALS = CRYPTO_PROFILES["auto"]["esp"]
+
+# Candidatos para probing / detecção automática
+PROBE_CANDIDATES = [
+    ("DH Group 14 (MODP2048 - Padrão FortiOS)", "aes256-sha256-modp2048, aes128-sha256-modp2048", "aes256-sha256-modp2048, aes256-sha256"),
+    ("DH Group 18 (MODP8192 - Alta Segurança)", "aes256-sha256-modp8192", "aes256-sha256-modp8192, aes256-sha256"),
+    ("DH Group 14 SHA-1 (Compatibilidade FortiOS)", "aes256-sha1-modp2048", "aes256-sha1, aes256-sha256"),
+    ("DH Group 16 (MODP4096)", "aes256-sha256-modp4096", "aes256-sha256-modp4096, aes256-sha256"),
+    ("Curvas Elípticas ECP256 / GCM", "aes256gcm128-ecp256, aes256-sha256-ecp256", "aes256gcm128, aes256-sha256"),
+    ("DH Group 5 (MODP1536 Legado)", "aes256-sha1-modp1536", "aes256-sha1"),
+    ("DH Group 2 (MODP1024 / 3DES Legado)", "3des-sha1-modp1024", "3des-sha1"),
+]
 
 
 # ═══════════════════════════════════════════════════════════════ configuração
 
 def _escape(value):
     """Escapa um valor para uso dentro de string aspeada do swanctl.conf."""
-    return str(value or "").replace("\\", "\\\\").replace('"', '\\"')
+    clean = str(value or "").replace("\r", "").replace("\n", "")
+    return clean.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def build_swanctl_conf(gw, local_ip="", user="", pwd="", psk="", include_local_addrs=True):
+def build_swanctl_conf(
+    gw,
+    local_ip="",
+    user="",
+    pwd="",
+    psk="",
+    include_local_addrs=True,
+    ike_proposals=None,
+    esp_proposals=None,
+    auth_method="eap-mschapv2",
+):
     """Gera o swanctl.conf (IKEv2 + PSK no remote + EAP-MSCHAPv2 no local)."""
     local_line = ""
     if include_local_addrs and local_ip:
         local_line = "        local_addrs  = %s\n" % local_ip
+
+    ike = ike_proposals or IKE_PROPOSALS
+    esp = esp_proposals or ESP_PROPOSALS
+    auth = auth_method or "eap-mschapv2"
 
     return (
         "connections {\n"
@@ -92,9 +155,9 @@ def build_swanctl_conf(gw, local_ip="", user="", pwd="", psk="", include_local_a
         "        vips = 0.0.0.0\n"
         "\n"
         "        local {\n"
-        "            auth     = eap-mschapv2\n"
-        "            id       = %(user)s\n"
-        "            eap_id   = %(user)s\n"
+        "            auth     = %(auth)s\n"
+        '            id       = "%(user)s"\n'
+        '            eap_id   = "%(user)s"\n'
         "        }\n"
         "\n"
         "        remote {\n"
@@ -120,7 +183,7 @@ def build_swanctl_conf(gw, local_ip="", user="", pwd="", psk="", include_local_a
         '        secret = "%(psk)s"\n'
         "    }\n"
         "    eap-%(conn)s {\n"
-        "        id     = %(user)s\n"
+        '        id     = "%(user)s"\n'
         '        secret = "%(pwd)s"\n'
         "    }\n"
         "}\n"
@@ -128,9 +191,10 @@ def build_swanctl_conf(gw, local_ip="", user="", pwd="", psk="", include_local_a
         "conn": CHILD_NAME,
         "gw": gw,
         "local_line": local_line,
-        "ike": IKE_PROPOSALS,
-        "esp": ESP_PROPOSALS,
-        "user": user,
+        "ike": ike,
+        "esp": esp,
+        "auth": auth,
+        "user": _escape(user),
         "psk": _escape(psk),
         "pwd": _escape(pwd),
     }
@@ -214,7 +278,7 @@ def parse_list_sas(output):
 
 
 def map_engine_error(output):
-    """Traduz a saída do motor em mensagem acionável para o usuário."""
+    """Traduz a saída do motor em mensagem clara e acionável para o usuário."""
     raw = output or ""
     lower = raw.lower()
 
@@ -225,9 +289,15 @@ def map_engine_error(output):
             "servico IKEEXT e tente novamente."
         )
     if "authentication_failure" in lower or "authentication failed" in lower or "eap_mschapv2 method failed" in lower or "auth_failed" in lower:
-        return "Falha de autenticacao: verifique usuario e senha (sem caracteres extras como #)."
+        return (
+            "Falha de autenticacao: usuario ou senha incorretos no Gateway VPN (FortiGate). "
+            "Verifique credenciais, domínio corporativo ou permissões no grupo VPN."
+        )
     if "no_proposal_chosen" in lower:
-        return "O FortiGate respondeu NO_PROPOSAL_CHOSEN (propostas criptograficas incompativeis)."
+        return (
+            "O FortiGate respondeu NO_PROPOSAL_CHOSEN (propostas criptograficas incompativeis). "
+            "Utilize a detecção automática para identificar a criptografia aceita pelo FortiGate."
+        )
     if "retransmit" in lower or "timed out" in lower or "timeout" in lower:
         return "Tempo esgotado: sem resposta do Gateway nas portas UDP 500/4500 (rede/firewall)."
     if "psk" in lower and ("missing" in lower or "no secret" in lower or "found no" in lower):
@@ -235,7 +305,7 @@ def map_engine_error(output):
     if "vip" in lower and ("not supported" in lower or "failed to install" in lower):
         return (
             "O motor nao conseguiu instalar o IP virtual devolvido pelo FortiGate. "
-            "Tente a estrategia de VIP 'loopback' nas opcoes avancadas."
+            "Tente a estrategia de VIP 'loopback' ou 'none' nas opcoes avancadas."
         )
     if "permission denied" in lower or "access is denied" in lower or "elevacao" in lower:
         return "Permissao negada: o Windows exigiu elevacao e ela nao foi concedida."
@@ -446,6 +516,108 @@ def _base_dirs():
     return unique
 
 
+def _bundled_engine_dir():
+    """
+    `vendor/windows` embutido no .exe (PyInstaller onefile), se houver.
+
+    No build de arquivo único os binários saem dentro do bundle e o PyInstaller
+    os descompacta em `_MEIPASS` a cada execução.
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if not meipass:
+        return None
+    for candidate in (
+        os.path.join(meipass, "vendor", "windows"),
+        os.path.join(meipass, "vendor"),
+        meipass,
+    ):
+        if all(os.path.isfile(os.path.join(candidate, exe)) for exe in ("charon-svc.exe", "swanctl.exe")):
+            return candidate
+    return None
+
+
+def windows_engine_extract_dir():
+    """
+    Diretório estável para o motor extraído do .exe autocontido.
+
+    Fica em `%LOCALAPPDATA%\\FortiClientVPN\\engine`: gravável sem admin e
+    legível/executável pelo SYSTEM, que é quem roda o charon-svc registrado
+    como serviço.
+    """
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(
+        os.path.expanduser("~"), "AppData", "Local"
+    )
+    return os.path.join(base, APP_DIR_NAME, "engine")
+
+
+# O strongswan.conf é reescrito pelo próprio aplicativo (caminho do log do
+# charon), então não pode ser comparado nem sobrescrito na extração.
+_ENGINE_PRESERVED = ("strongswan.conf",)
+
+
+def _engine_is_current(source, target):
+    """True se `target` já tem todos os binários de `source` do mesmo tamanho."""
+    try:
+        names = os.listdir(source)
+    except OSError:
+        return False
+    for name in names:
+        if name in _ENGINE_PRESERVED:
+            continue
+        src = os.path.join(source, name)
+        if not os.path.isfile(src):
+            continue
+        dst = os.path.join(target, name)
+        if not os.path.isfile(dst):
+            return False
+        try:
+            if os.path.getsize(src) != os.path.getsize(dst):
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def materialize_bundled_engine():
+    """
+    Copia o motor embutido no .exe para um diretório estável do sistema.
+
+    Por que não usar o `_MEIPASS` direto: ele muda a cada execução e é apagado
+    ao sair, e o motor precisa sobreviver a isso por dois motivos:
+
+      * o serviço é registrado com `sc create binPath=<caminho>` — um caminho
+        que some depois do reboot deixa o serviço quebrado para sempre;
+      * o `charon-svc` lê o `strongswan.conf` do próprio diretório, e o
+        aplicativo regrava esse arquivo para apontar o log.
+
+    Devolve o diretório com o motor, ou None quando não há motor embutido.
+    """
+    if not IS_WINDOWS:
+        return None
+    source = _bundled_engine_dir()
+    if not source:
+        return None
+    target = windows_engine_extract_dir()
+    try:
+        if os.path.isdir(target) and os.path.samefile(source, target):
+            return target
+    except OSError:
+        pass
+    try:
+        if os.path.isdir(target) and _engine_is_current(source, target):
+            return target
+        ensure_dir(target)
+        for name in os.listdir(source):
+            if name in _ENGINE_PRESERVED and os.path.exists(os.path.join(target, name)):
+                continue
+            src = os.path.join(source, name)
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(target, name))
+        return target
+    except OSError:
+        return None
+
+
 def windows_engine_dir():
     """Localiza o diretório com charon-svc.exe/swanctl.exe (vendor/windows)."""
     override = os.environ.get(WIN_ENGINE_DIR_ENV)
@@ -460,10 +632,16 @@ def windows_engine_dir():
                 base,
             ]
         )
+    meipass = getattr(sys, "_MEIPASS", None)
     for candidate in candidates:
+        # Caminho dentro do bundle onefile: temporário e volátil, não serve nem
+        # para o serviço nem para o strongswan.conf do daemon. Abaixo ele é
+        # materializado num diretório que persiste.
+        if meipass and candidate.startswith(meipass):
+            continue
         if all(os.path.isfile(os.path.join(candidate, exe)) for exe in ("charon-svc.exe", "swanctl.exe")):
             return candidate
-    return None
+    return materialize_bundled_engine()
 
 
 def _current_platform():
@@ -955,6 +1133,9 @@ class VpnEngine:
             user=settings.get("user", "").strip(),
             pwd=settings.get("password", "").strip(),
             psk=settings.get("psk", "").strip(),
+            ike_proposals=settings.get("ike_proposals"),
+            esp_proposals=settings.get("esp_proposals"),
+            auth_method=settings.get("auth_method", "eap-mschapv2"),
         )
         self._call(["sudo", "mkdir", "-p", "/etc/swanctl/conf.d"], timeout=20)
         self._call(["sudo", "tee", LINUX_CONF_FILE], input_text=conf, timeout=20)
@@ -962,10 +1143,6 @@ class VpnEngine:
 
         # Derruba SAs penduradas de tentativas anteriores ANTES de carregar a
         # configuração nova (mesma razão do Windows, onde isto já existia).
-        # Uma tentativa interrompida no meio (timeout de 90s, fechar a janela)
-        # deixa meia SA viva: em campo foram vistas duas ao mesmo tempo, com
-        # identidades e `local_addrs` diferentes, somando retransmissões e
-        # tornando o --list-sas do diagnóstico ambíguo.
         stale = self._call(
             ["sudo", "swanctl", "--terminate", "--ike", CHILD_NAME], timeout=45
         )
@@ -977,11 +1154,6 @@ class VpnEngine:
         load = self._call(["sudo", "swanctl", "--load-all"], timeout=40)
         self._call(["sudo", "ip", "rule", "add", "lookup", "220", "pref", "220"], timeout=15)
 
-        # Guarda contra a falha silenciosa que já ocorreu em campo: `--load-all`
-        # retornava rc=0 sem carregar conexão nenhuma e o erro só aparecia no
-        # `--initiate` ("CHILD_SA config not found"), sem indicar o motivo.
-        # Só vale quando os dois comandos responderam: com o charon parado o
-        # `--list-conns` também falha e não se pode concluir nada.
         listed = self._call(["sudo", "swanctl", "--list-conns"], timeout=30)
         if load.returncode == 0 and listed.returncode == 0 and CHILD_NAME not in listed.output:
             return Status(
@@ -1008,16 +1180,17 @@ class VpnEngine:
         if proc.returncode == 0 and status.connected:
             return Status(True, status.vip, "conectado", "")
 
-        error = map_engine_error(clean)
-        # O motivo real (AUTHENTICATION_FAILED, NO_PROPOSAL_CHOSEN, ID_MISMATCH)
-        # não aparece no stdout do swanctl: no Linux ele só existe no journal do
-        # charon. Aponta o caminho e já anexa as últimas linhas.
         log_tail = self._linux_engine_log(lines=40)
+        combined = clean + ("\n" + log_tail if log_tail else "")
+        error = map_engine_error(combined)
         if log_tail:
             error += " | Log do motor: " + " | ".join(log_tail.splitlines()[-3:])[:300]
         else:
             error += " | Log do motor: journalctl -u strongswan -n 200 (sem permissao de leitura ou sem registros)"
-        return Status(False, None, clean, error)
+        detail = clean
+        if log_tail:
+            detail += "\n\nLog do motor (strongSwan):\n" + log_tail
+        return Status(False, None, detail, error)
 
     def _linux_engine_log(self, lines=200):
         """Log do charon/strongSwan no Linux (journal). Ver `linux_engine_log`."""
@@ -1031,10 +1204,6 @@ class VpnEngine:
             return Status(False, None, "", detail)
 
         problems = []
-        # A ordem importa: o strongswan.conf do daemon só é lido no arranque do
-        # serviço, então ele precisa estar no disco ANTES de subirmos o serviço.
-        # Sem este sync, um strongswan.conf sem `path` (instalação antiga) deixa
-        # o daemon sem log nenhum.
         if self._sync_engine_strongswan_conf():
             problems.append("strongswan.conf do motor estava sem log e o servico foi reiniciado")
         if not self._ensure_windows_service():
@@ -1050,14 +1219,11 @@ class VpnEngine:
             user=settings.get("user", "").strip(),
             pwd=settings.get("password", "").strip(),
             psk=settings.get("psk", "").strip(),
+            ike_proposals=settings.get("ike_proposals"),
+            esp_proposals=settings.get("esp_proposals"),
+            auth_method=settings.get("auth_method", "eap-mschapv2"),
         )
 
-        # Três arquivos, papéis distintos:
-        #   swanctl.conf     -> conexões + segredos (é ESTE que o swanctl lê)
-        #   strongswan.conf  -> configuração da biblioteca/daemon (log)
-        #   ambos no mesmo diretório, que é o cwd e o SWANCTL_DIR
-        # O swanctl aborta se o strongswan.conf não existir, e só carrega
-        # conexões que estejam no swanctl.conf.
         ensure_dir(windows_swanctl_dir())
         try:
             with open(windows_swanctl_conf_file(), "w", encoding="utf-8") as handle:
@@ -1074,12 +1240,6 @@ class VpnEngine:
         swanctl = swanctl_path(self.platform)
         self._log("Diretorio de configuracao do swanctl: %s" % windows_swanctl_dir())
 
-        # Derruba SAs penduradas de tentativas anteriores ANTES de iniciar.
-        # Com keyingtries finito elas se encerram sozinhas, mas uma tentativa
-        # interrompida no meio (timeout do app, fechar a janela) deixa meia SA
-        # viva: em campo foram observadas duas simultâneas, uma delas com o IP
-        # local obsoleto. Elas somam retransmisses, competem pelas portas 500/4500
-        # e fazem o --list-sas do diagnóstico ficar ambíguo.
         stale = self._call(
             [swanctl, "--terminate", "--ike", CHILD_NAME],
             timeout=30,
@@ -1095,9 +1255,6 @@ class VpnEngine:
             [swanctl, "--load-all"], timeout=60, env=self._win_env(), cwd=self._win_workdir()
         )
 
-        # Guarda contra a falha silenciosa que já ocorreu em campo: --load-all
-        # retornava rc=0 sem carregar nada e o erro só aparecia no --initiate
-        # ("CHILD_SA config not found"), sem indicar o motivo.
         listed = self._call(
             [swanctl, "--list-conns"], timeout=60, env=self._win_env(), cwd=self._win_workdir()
         )
@@ -1119,17 +1276,84 @@ class VpnEngine:
             if applied:
                 note += " (%s)" % applied
             return Status(True, status.vip, note, "")
-        error = map_engine_error(proc.output)
+
+        charon_log = windows_charon_log_file()
+        charon_tail = _read_log_tail(charon_log, lines=50) if os.path.isfile(charon_log) else ""
+        combined = proc.output + ("\n" + charon_tail if charon_tail else "")
+        error = map_engine_error(combined)
         if problems:
             error = error + " | " + "; ".join(problems)
-        # Aponta o log do daemon. O stdout do swanctl nem sempre traz o notify
-        # do servidor, e sem essa pista o usuário só tinha "timeout" para
-        # investigate — o motivo real estava no charon.log, que ele não sabia
-        # que existia.
-        charon_log = windows_charon_log_file()
         if os.path.isfile(charon_log):
             error += " | Log do motor (motivo real): %s" % charon_log
-        return Status(False, None, proc.output, error)
+
+        detail = proc.output
+        if charon_tail:
+            detail += "\n\nLog do motor (charon.log):\n" + charon_tail
+        return Status(False, None, detail, error)
+
+    def probe_crypto(self, settings, progress_callback=None):
+        """
+        Testa as propostas de criptografia suportadas pelo FortiGate.
+        Retorna (ike_proposta, esp_proposta, nome_perfil).
+        """
+        gateway = settings.get("gateway", "").strip()
+        psk = settings.get("psk", "").strip()
+        local_ip = sanitize_local_ip(settings.get("local_ip", ""))
+        if not gateway or not psk:
+            return None, None, "Informe o Gateway e a Chave PSK para testar a criptografia."
+
+        total = len(PROBE_CANDIDATES)
+        self._log(f"Iniciando detecção de criptografia no FortiGate {gateway} ({total} perfis)...")
+
+        for idx, (cand_name, cand_ike, cand_esp) in enumerate(PROBE_CANDIDATES):
+            percent = int((idx / total) * 100)
+            if progress_callback:
+                progress_callback(percent, f"Testando {cand_name}...")
+
+            test_conf = build_swanctl_conf(
+                gw=gateway,
+                local_ip=local_ip,
+                user="probe",
+                pwd="probe",
+                psk=psk,
+                ike_proposals=cand_ike,
+                esp_proposals=cand_esp,
+            )
+
+            if self.platform == "windows":
+                swanctl_file = windows_swanctl_conf_file()
+                ensure_dir(windows_swanctl_dir())
+                try:
+                    with open(swanctl_file, "w", encoding="utf-8") as h:
+                        h.write(test_conf)
+                except Exception:
+                    continue
+                load_cmd = [swanctl_path(self.platform), "--load-all"]
+                init_cmd = [swanctl_path(self.platform), "--initiate", "--child", CHILD_NAME]
+                term_cmd = [swanctl_path(self.platform), "--terminate", "--ike", CHILD_NAME]
+                env, cwd = self._win_env(), self._win_workdir()
+            else:
+                self._call(["sudo", "tee", LINUX_CONF_FILE], input_text=test_conf, timeout=10)
+                load_cmd = ["sudo", "swanctl", "--load-all"]
+                init_cmd = ["sudo", "swanctl", "--initiate", "--child", CHILD_NAME]
+                term_cmd = ["sudo", "swanctl", "--terminate", "--ike", CHILD_NAME]
+                env, cwd = None, None
+
+            self._call(load_cmd, timeout=10, env=env, cwd=cwd)
+            res = self._call(init_cmd, timeout=5, env=env, cwd=cwd)
+            self._call(term_cmd, timeout=5, env=env, cwd=cwd)
+
+            out_low = (res.output or "").lower()
+            if "selected proposal" in out_low or "received packet" in out_low or "parsed ike_sa_init" in out_low or "eap" in out_low or "auth" in out_low:
+                if "no_proposal_chosen" not in out_low:
+                    if progress_callback:
+                        progress_callback(100, f"Sucesso: {cand_name}")
+                    self._log(f"Criptografia suportada pelo FortiGate: {cand_name}")
+                    return cand_ike, cand_esp, cand_name
+
+        if progress_callback:
+            progress_callback(100, "Concluído (usando perfil Padrão)")
+        return IKE_PROPOSALS, ESP_PROPOSALS, "Automático (Padrão FortiGate)"
 
 
     # --------------------------------------------------------- desconectar

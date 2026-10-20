@@ -69,7 +69,7 @@ def get_resource_path(relative_path):
     return full_path
 
 
-def detect_local_ip(target_gw=cfgstore.DEFAULT_GATEWAY):
+def detect_local_ip(target_gw=cfgstore.EXAMPLE_GATEWAY):
     """
     IP local que deve falar com o Gateway.
 
@@ -107,7 +107,7 @@ def make_round_image(pil_img, size):
 class VpnApp:
     def __init__(self, root):
         self.root = root
-        os_label = "Windows" if IS_WINDOWS else "Linux"
+        os_label = "Windows (Experimental)" if IS_WINDOWS else "Linux"
         self.root.title(f"FortiClient VPN - DTIC ({os_label})")
         self.root.geometry("660x800")
         self.root.resizable(False, False)
@@ -123,6 +123,8 @@ class VpnApp:
 
         self.setup_window_icon()
         self._build_header(os_label)
+        if IS_WINDOWS:
+            self._build_windows_warning()
         self._build_status_bar()
         self._build_config_card()
         self._build_buttons()
@@ -132,6 +134,8 @@ class VpnApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.log(f"FortiClient VPN Manager iniciado no {os_label} (versao {cfgstore.app_version()}).")
+        if IS_WINDOWS:
+            self.log("AVISO: A versão para Windows é experimental.")
         available, detail = self.engine.availability()
         if available:
             self.log(f"Motor VPN: {detail}")
@@ -174,6 +178,18 @@ class VpnApp:
             fg="#94a3b8",
             bg="#0f172a",
         ).pack(anchor="w")
+
+    def _build_windows_warning(self):
+        warn_frame = tk.Frame(self.root, bg="#fffbeb", highlightbackground="#f59e0b", highlightthickness=1)
+        warn_frame.pack(fill="x", padx=20, pady=(6, 0))
+        tk.Label(
+            warn_frame,
+            text="⚠️ VERSÃO EXPERIMENTAL (WINDOWS): Esta versão está em fase de testes. Preencha seus dados de conexão abaixo.",
+            font=("Helvetica", 8, "bold"),
+            bg="#fffbeb",
+            fg="#b45309",
+            pady=4,
+        ).pack()
 
     def _build_status_bar(self):
         status_bar = tk.Frame(self.root, bg="#ffffff", bd=1, relief="solid")
@@ -227,8 +243,62 @@ class VpnApp:
         self.entry_pass = tk.Entry(config_card, font=("Monospace", 9), show="•", width=18)
         self.entry_pass.grid(row=2, column=3, sticky="w", padx=6, pady=4)
 
+        # Criptografia FortiGate e Auto-Detecção
+        tk.Label(config_card, text="Criptografia FortiOS:", font=("Helvetica", 9, "bold"), bg="#ffffff", fg="#334155").grid(
+            row=3, column=0, sticky="w", pady=4
+        )
+        crypto_frame = tk.Frame(config_card, bg="#ffffff")
+        crypto_frame.grid(row=3, column=1, columnspan=3, sticky="ew", pady=4)
+
+        self.var_crypto_profile = tk.StringVar(value="auto")
+        crypto_options = [
+            ("auto", "Automático (Padrão FortiGate)"),
+            ("high", "Alta Segurança (MODP 8192/4096)"),
+            ("standard", "Padrão Corporativo (DH14 / MODP2048)"),
+            ("modern", "Moderno (Curvas Elípticas GCM)"),
+            ("legacy", "Compatibilidade Ampla (Legado)"),
+        ]
+        self.combo_crypto = ttk.Combobox(
+            crypto_frame,
+            textvariable=self.var_crypto_profile,
+            values=[k for k, _ in crypto_options],
+            state="readonly",
+            width=16,
+            font=("Monospace", 9),
+        )
+        self.combo_crypto.pack(side="left", padx=(6, 8))
+
+        self.btn_detect_crypto = tk.Button(
+            crypto_frame,
+            text="⚡ Auto-Detectar Criptografia",
+            font=("Helvetica", 8, "bold"),
+            bg="#0284c7",
+            fg="#ffffff",
+            activebackground="#0369a1",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=8,
+            pady=2,
+            cursor="hand2",
+            command=self.on_detect_crypto,
+        )
+        self.btn_detect_crypto.pack(side="left")
+
+        # Barra de Progresso da Detecção (inicialmente oculta)
+        self.frame_progress = tk.Frame(config_card, bg="#f8fafc", bd=1, relief="solid", padx=8, pady=6)
+        self.lbl_progress_status = tk.Label(
+            self.frame_progress,
+            text="Sondando criptografia no FortiGate...",
+            font=("Helvetica", 8, "italic"),
+            bg="#f8fafc",
+            fg="#0369a1",
+        )
+        self.lbl_progress_status.pack(anchor="w", pady=(0, 2))
+        self.progress_bar = ttk.Progressbar(self.frame_progress, orient="horizontal", mode="determinate", length=400)
+        self.progress_bar.pack(fill="x", expand=True)
+
         options_frame = tk.Frame(config_card, bg="#ffffff")
-        options_frame.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 4))
+        options_frame.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(8, 4))
 
         self.var_show_pwd = tk.BooleanVar(value=False)
         tk.Checkbutton(
@@ -266,10 +336,23 @@ class VpnApp:
             command=self.save_user_config,
         ).pack(side="right")
 
+        tk.Button(
+            options_frame,
+            text="🗑️ Limpar Campos",
+            font=("Helvetica", 8),
+            bg="#f1f5f9",
+            fg="#64748b",
+            relief="flat",
+            padx=6,
+            pady=3,
+            cursor="hand2",
+            command=self.clear_user_config,
+        ).pack(side="right", padx=(0, 6))
+
         self.adv_expanded = False
         self.btn_toggle_adv = tk.Button(
             config_card,
-            text="▶ Opções Avançadas (IP Local, VIP)",
+            text="▶ Opções Avançadas (IP Local, VIP, Autenticação)",
             font=("Helvetica", 8, "bold"),
             bg="#f1f5f9",
             fg="#475569",
@@ -281,7 +364,7 @@ class VpnApp:
             pady=3,
             command=self.toggle_advanced,
         )
-        self.btn_toggle_adv.grid(row=4, column=0, columnspan=4, sticky="w", pady=(6, 2))
+        self.btn_toggle_adv.grid(row=6, column=0, columnspan=4, sticky="w", pady=(6, 2))
 
         self.frame_advanced = tk.Frame(config_card, bg="#f8fafc", bd=1, relief="solid", padx=10, pady=8)
 
@@ -329,6 +412,19 @@ class VpnApp:
             width=10,
             font=("Monospace", 9),
         ).grid(row=2, column=1, sticky="w", padx=6, pady=4)
+
+        tk.Label(self.frame_advanced, text="Método EAP:", font=("Helvetica", 9), bg="#f8fafc", fg="#64748b").grid(
+            row=3, column=0, sticky="w", pady=4
+        )
+        self.var_auth_method = tk.StringVar(value="eap-mschapv2")
+        ttk.Combobox(
+            self.frame_advanced,
+            textvariable=self.var_auth_method,
+            values=("eap-mschapv2", "eap-md5", "eap-gtc"),
+            state="readonly",
+            width=15,
+            font=("Monospace", 9),
+        ).grid(row=3, column=1, sticky="w", padx=6, pady=4)
 
     def _build_buttons(self):
         btn_frame = tk.Frame(self.root, bg="#f1f5f9")
@@ -527,7 +623,7 @@ class VpnApp:
             self.refresh_auto_ip()
 
     def refresh_auto_ip(self):
-        gateway = self.entry_gateway.get().strip() or cfgstore.DEFAULT_GATEWAY
+        gateway = self.entry_gateway.get().strip() or cfgstore.EXAMPLE_GATEWAY
         detected = detect_local_ip(gateway)
         self.entry_local_ip.delete(0, tk.END)
         self.entry_local_ip.insert(0, detected)
@@ -544,6 +640,8 @@ class VpnApp:
             "save_credentials": bool(self.var_save_creds.get()),
             "custom_local_ip": self.entry_local_ip.get().strip() if self.user_manually_edited_ip else "",
             "vip_strategy": self.var_vip_strategy.get(),
+            "crypto_profile": self.var_crypto_profile.get(),
+            "auth_method": self.var_auth_method.get(),
         }
 
     def load_initial_config(self):
@@ -552,17 +650,16 @@ class VpnApp:
         padrão, a menos que o usuário tenha definido um IP customizado.
         """
         cfg = self.store.load_plain()
-        gateway = cfg.get("gateway") or cfgstore.DEFAULT_GATEWAY
-        detected = detect_local_ip(gateway)
+        # Sem gateway salvo o campo fica vazio (nada de preencher com o IP de
+        # exemplo): o aviso "Informe o Gateway VPN." aparece ao conectar.
+        gateway = (cfg.get("gateway") or "").strip()
+        detected = detect_local_ip(gateway or cfgstore.EXAMPLE_GATEWAY)
 
         self.entry_gateway.delete(0, tk.END)
         self.entry_gateway.insert(0, gateway)
 
         saved_manual_ip = sanitize_local_ip(cfg.get("custom_local_ip"))
         if cfg.get("custom_local_ip") and not saved_manual_ip:
-            # Configuração migrada de outro PC: `custom_local_ip` apontava para
-            # o VIP do túnel daquela máquina (ex.: 192.0.2.12). Aqui ele não
-            # existe e viraria um `local_addrs` morto — ignora e volta ao auto.
             self.log(
                 "IP local salvo (%s) nao existe nesta maquina; usando o detectado (%s)."
                 % (cfg.get("custom_local_ip"), detected)
@@ -586,7 +683,66 @@ class VpnApp:
         self.entry_psk.insert(0, cfg.get("psk", ""))
         self.var_save_creds.set(bool(cfg.get("save_credentials", True)))
         self.var_vip_strategy.set(cfg.get("vip_strategy", "auto"))
+        self.var_crypto_profile.set(cfg.get("crypto_profile", "auto"))
+        self.var_auth_method.set(cfg.get("auth_method", "eap-mschapv2"))
         self.log("Configurações salvas carregadas.")
+
+    def on_detect_crypto(self):
+        """Testa propostas com o FortiGate e exibe barra de progresso."""
+        gateway = self.entry_gateway.get().strip()
+        psk = self.entry_psk.get().strip()
+        if not gateway or not psk:
+            messagebox.showwarning("Campos Obrigatórios", "Informe o Gateway e a Chave PSK para testar a criptografia.")
+            return
+
+        self.btn_detect_crypto.config(state="disabled")
+        self.frame_progress.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(4, 6))
+        self.progress_bar["value"] = 0
+        self.lbl_progress_status.config(text="Sondando Gateway FortiGate...")
+        self.log(f"Iniciando detecção de criptografia contra {gateway}...")
+
+        def update_ui(pct, text):
+            self.root.after(0, lambda: self._apply_detect_progress(pct, text))
+
+        def run():
+            settings = {
+                "gateway": gateway,
+                "psk": psk,
+                "local_ip": self.entry_local_ip.get().strip(),
+            }
+            try:
+                ike, esp, name = self.engine.probe_crypto(settings, progress_callback=update_ui)
+            except Exception as exc:
+                ike, esp, name = None, None, str(exc)
+
+            def done():
+                self.frame_progress.grid_remove()
+                self.btn_detect_crypto.config(state="normal")
+                if ike:
+                    # Mapeia para o perfil correspondente
+                    found_key = "auto"
+                    for k, prof in vpn_engine.CRYPTO_PROFILES.items():
+                        if prof["ike"] == ike:
+                            found_key = k
+                            break
+                    self.var_crypto_profile.set(found_key)
+                    self.log(f"✓ Criptografia detectada: {name}")
+                    messagebox.showinfo(
+                        "Criptografia Detectada",
+                        f"O Gateway FortiGate respondeu com sucesso ao perfil:\n\n{name}\n\nConfiguração aplicada automaticamente."
+                    )
+                else:
+                    self.log(f"✗ Detecção finalizada: {name}")
+                    messagebox.showwarning("Detecção", f"Não foi possível confirmar uma cifra específica: {name}.\nUsando perfil Automático Padrão.")
+
+            self.root.after(0, done)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _apply_detect_progress(self, pct, text):
+        self.progress_bar["value"] = pct
+        self.lbl_progress_status.config(text=text)
+        self.log(f"  [Detecção {pct}%] {text}")
 
     def save_user_config(self, notify=True):
         if not self.var_save_creds.get():
@@ -606,6 +762,16 @@ class VpnApp:
             self.log(f"Erro ao salvar configurações locais: {exc}")
             if notify:
                 messagebox.showerror("Erro", f"Falha ao salvar configurações: {exc}")
+
+    def clear_user_config(self):
+        self.entry_gateway.delete(0, tk.END)
+        self.entry_user.delete(0, tk.END)
+        self.entry_pass.delete(0, tk.END)
+        self.entry_psk.delete(0, tk.END)
+        self.store.delete()
+        self.refresh_auto_ip()
+        self.log("Campos de conexão e credenciais salvas limpos.")
+        messagebox.showinfo("Configurações", "Campos e credenciais salvas neste computador foram limpos.")
 
     # ───────────────────────────────────────────────────────── status
     def start_auto_refresh(self):
@@ -651,6 +817,8 @@ class VpnApp:
     # ───────────────────────────────────────────────────── conexão
     def _settings_for_engine(self):
         cfg = self._current_config()
+        crypto_key = self.var_crypto_profile.get()
+        profile = vpn_engine.CRYPTO_PROFILES.get(crypto_key, vpn_engine.CRYPTO_PROFILES["auto"])
         return {
             "gateway": cfg["gateway"],
             "local_ip": self.entry_local_ip.get().strip(),
@@ -658,6 +826,10 @@ class VpnApp:
             "password": cfg["password"],
             "psk": cfg["psk"],
             "vip_strategy": cfg["vip_strategy"],
+            "crypto_profile": crypto_key,
+            "ike_proposals": profile["ike"],
+            "esp_proposals": profile["esp"],
+            "auth_method": self.var_auth_method.get(),
         }
 
     def on_connect(self):
@@ -665,6 +837,15 @@ class VpnApp:
 
         if not settings["gateway"]:
             messagebox.showwarning("Campos Obrigatórios", "Informe o Gateway VPN.")
+            return
+
+        if cfgstore.is_example_gateway(settings["gateway"]):
+            messagebox.showwarning(
+                "Campos Obrigatórios",
+                "O gateway ainda é o IP de exemplo 198.51.100.100 "
+                "(faixa de documentação, ninguém responde). "
+                "Informe o IP real do FortiGate.",
+            )
             return
 
         missing = []
@@ -696,10 +877,10 @@ class VpnApp:
             if status.connected:
                 self.root.after(0, lambda s=status: self.log(f"✓ SUCESSO: VPN CONECTADA! {s.detail}"))
             else:
-                self.root.after(0, lambda s=status: self.log(f"✗ {s.error}"))
+                self.root.after(0, lambda s=status: self.log(f"✗ Falha: {s.error}"))
                 if status.detail:
-                    self.root.after(0, lambda s=status: self.log(f"   Detalhe: {s.detail[:400]}"))
-                self.root.after(0, lambda: messagebox.showerror("Falha na conexão", status.error))
+                    self.root.after(0, lambda s=status: self.log(f"--- Detalhes Técnicos do Motor ---\n{s.detail}"))
+                self.root.after(0, lambda s=status: messagebox.showerror("Falha na conexão", s.error))
             self.root.after(0, lambda s=status: self.apply_status(s))
 
         threading.Thread(target=run, daemon=True).start()
@@ -843,10 +1024,10 @@ class VpnApp:
 
 def _cli_settings(store):
     cfg = store.load_plain()
-    gateway = cfg.get("gateway") or cfgstore.DEFAULT_GATEWAY
+    gateway = (cfg.get("gateway") or "").strip()
     return {
         "gateway": gateway,
-        "local_ip": sanitize_local_ip(cfg.get("custom_local_ip")) or detect_local_ip(gateway),
+        "local_ip": sanitize_local_ip(cfg.get("custom_local_ip")) or detect_local_ip(gateway or cfgstore.EXAMPLE_GATEWAY),
         "user": cfg.get("user", ""),
         "password": cfg.get("password", ""),
         "psk": cfg.get("psk", ""),
@@ -878,6 +1059,15 @@ def run_cli(args):
 
     settings = _cli_settings(store)
     if args.connect:
+        if not settings["gateway"]:
+            print("Erro: gateway nao configurado (salve o IP do FortiGate na interface grafica).")
+            return 2
+        if cfgstore.is_example_gateway(settings["gateway"]):
+            print(
+                "Erro: gateway ainda e o IP de exemplo 198.51.100.100 "
+                "(faixa de documentacao, ninguem responde). Informe o IP real do FortiGate."
+            )
+            return 2
         if not settings["user"] or not settings["password"] or not settings["psk"]:
             print("Erro: usuario, senha e PSK precisam estar salvos (use a interface grafica).")
             return 2
@@ -900,16 +1090,45 @@ def run_cli(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="FortiClient VPN Manager (DTIC)")
+    desc = "FortiClient VPN Manager (DTIC) - Windows (Experimental)" if IS_WINDOWS else "FortiClient VPN Manager (DTIC)"
+    parser = argparse.ArgumentParser(description=desc)
     parser.add_argument("--connect", action="store_true", help="conecta usando as credenciais salvas")
     parser.add_argument("--disconnect", action="store_true", help="desconecta a VPN")
     parser.add_argument("--diagnose", action="store_true", help="gera pacote de diagnostico e sai")
     parser.add_argument("--cleanup", action="store_true", help="remove residuos de versoes anteriores e sai")
+    parser.add_argument(
+        "--extract-assets",
+        metavar="DIR",
+        help=(
+            "copia os assets embutidos (icone, etc.) para DIR e sai. "
+            "Existe para o install-linux.sh conseguir montar o atalho do menu "
+            "sem precisar dos fontes."
+        ),
+    )
     return parser
+
+
+def extract_assets(dest_dir):
+    """Despeja os recursos embutidos no binário (icone incluído) em `dest_dir`."""
+    assets = ["assets/icon.png", "assets/icon.ico", "assets/dtic-logo-whasapp.jpeg"]
+    os.makedirs(dest_dir, exist_ok=True)
+    copied = 0
+    for relative in assets:
+        source = get_resource_path(relative)
+        if not os.path.isfile(source):
+            continue
+        target = os.path.join(dest_dir, os.path.basename(relative))
+        with open(source, "rb") as src, open(target, "wb") as dst:
+            dst.write(src.read())
+        copied += 1
+    print("OK: %d arquivo(s) em %s" % (copied, dest_dir))
+    return 0 if copied else 1
 
 
 def main():
     args = build_parser().parse_args()
+    if args.extract_assets:
+        return extract_assets(args.extract_assets)
     if args.connect or args.disconnect or args.diagnose or args.cleanup:
         return run_cli(args)
 

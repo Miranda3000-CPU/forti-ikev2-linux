@@ -18,18 +18,29 @@ conflitos de rota.
 
 ## Instalação
 
-**Você não precisa compilar nada (Linux).** Baixe o pacote pronto da
+**Você não precisa compilar nada.** Baixe os arquivos da
 [**última release**](https://github.com/Miranda3000-CPU/forti-ikev2-linux/releases/latest):
 
-| Sistema         | Arquivo                             | Como instalar                                         |
-| --------------- | ----------------------------------- | ----------------------------------------------------- |
-| Debian / Ubuntu | `forticlient-vpn_<versão>_all.deb` | `sudo apt install ./forticlient-vpn_<versão>_all.deb` |
+| Sistema | Arquivo | Como instalar |
+| --- | --- | --- |
+| Debian / Ubuntu | `FortiClient-VPN` + `install-linux.sh` | `chmod +x FortiClient-VPN install-linux.sh && ./install-linux.sh` |
+| Windows | `FortiClient-VPN.exe` | Execute o arquivo. |
 
-Cada release traz também `SHA256SUMS` (para conferir a integridade).
+Cada release traz também `SHA256SUMS` (para conferir a integridade) e, no
+Windows, o `strongswan-<versão>.tar.bz2` com o fonte do motor embarcado
+(obrigação da GPLv2).
 
-> **Windows: experimental.** O instalador `FortiClient-VPN-Setup.exe` está em
-> desenvolvimento e **ainda não é distribuído** nas releases até a estabilidade
-> ser confirmada. Para testar, compile a partir do código-fonte (veja abaixo).
+O `install-linux.sh` instala o strongSwan do sistema, as regras do
+`/etc/sudoers.d/` que o aplicativo precisa para operar o `swanctl` sem pedir
+senha, e o atalho do menu. Sem essas regras o aplicativo não consegue conectar,
+porque é gráfico e não tem terminal onde digitar a senha do `sudo`.
+
+No Windows o motor strongSwan vem embutido no `.exe` e é extraído na primeira
+execução para `%LOCALAPPDATA%\FortiClientVPN\engine` — não há instalador nem
+pasta adicional.
+
+> Um `.deb` ainda é gerado no CI como artefato de verificação, mas **não** é
+> mais publicado na release.
 
 <details>
 <summary>Instalar a partir do código-fonte</summary>
@@ -49,9 +60,7 @@ gera `dist/FortiClient-VPN-Setup.exe`).
 
 </details>
 
-O instalador do Windows registra e **inicia** o serviço `strongSwan IKE service`,
-libera as portas UDP 500/4500 e remove resíduos de versões antigas. O
-aplicativo ainda se recupera sozinho se algo faltar: sobe o motor em segundo
+A aplicação ainda se recupera sozinha se algo faltar: sobe o motor em segundo
 plano, para o serviço `IKEEXT` por dois caminhos diferentes, tenta instalar o IP
 virtual em todas as interfaces ativas e, se não conseguir em nenhuma, conecta
 mesmo assim.
@@ -60,7 +69,7 @@ mesmo assim.
 
 |              | Linux                                       | Windows                                              |
 | ------------ | ------------------------------------------- | ---------------------------------------------------- |
-| Motor        | strongSwan do sistema (`swanctl`)           | strongSwan vendorizado em `vendor/windows/`           |
+| Motor        | strongSwan do sistema (`swanctl`)           | strongSwan embutido no `.exe`, extraído na 1ª execução |
 | Privilégio   | `sudo swanctl` (regras em `/etc/sudoers.d`) | GUI como usuário; UAC só para serviço/IKEEXT/VIP      |
 | Configuração | `/etc/swanctl/conf.d/forti.conf`            | `%APPDATA%\FortiClientVPN\swanctl\conf.d\forti.conf`  |
 
@@ -106,7 +115,10 @@ executável), para o `AppVersion` do instalador Windows e para o `Version` do
 falha se algum desses divergir.
 
 ```bash
-# Linux: dist/forticlient-vpn_<versão>_all.deb
+# Linux: dist/FortiClient-VPN (executável único)
+./build/build_linux.sh
+
+# Linux: dist/forticlient-vpn_<versão>_all.deb (apenas CI, não é publicado)
 ./build/build_deb.sh
 
 # Windows a partir do Linux, um comando (instala MinGW, Wine, Python e Inno Setup)
@@ -128,16 +140,15 @@ python3 build/gen_build_info.py
 FCT_WEB_URL='https://seu-fortigate:10443/login?redir=%2F' python3 build/gen_build_info.py
 ```
 
-O **GitHub Actions** faz tudo sozinho: roda os testes, gera o `.deb` e, ao criar
-uma tag `v<versão>`, publica como **Release**. O instalador Windows é compilado
-no CI apenas como **verificação experimental** (não falha o build, não é
-publicado).
+O **GitHub Actions** faz tudo sozinho: roda os testes, gera o `.deb`, o
+executável único de Linux e o `.exe` autocontido do Windows e, ao criar uma tag
+`v<versão>`, publica como **Release**.
 
 Passos manuais do Windows (só se quiser controle fino):
 ```bash
 sudo apt install build-essential mingw-w64 wine curl bzip2 perl make
 ./build/build_strongswan_windows.sh        # motor strongSwan para Windows
-./build/build_windows.sh                   # .exe (PyInstaller/Wine) + instalador
+./build/build_windows.sh                   # .exe autocontido (PyInstaller/Wine)
 ```
 `ISCC=/caminho/ISCC.exe`, `WINE_PYTHON=C:/Python312/python.exe` e
 `WINE_BIN=wine` permitem ajustar caminhos.
@@ -185,20 +196,16 @@ Assinar localmente:
 FCT_SIGN_PFX=cert.pfx FCT_SIGN_PASS=... ./build/sign_windows.sh
 ```
 
-O script assina **o executável e o instalador** — o instalador sem assinatura
-continua disparando o alerta mesmo que o `.exe` dentro dele esteja assinado.
-Ele usa `osslsigncode` (`apt install osslsigncode`) ou `signtool` do Windows
-SDK, e roda depois do Inno Setup, nunca antes.
+O script assina o executável. Ele usa `osslsigncode`
+(`apt install osslsigncode`) ou `signtool` do Windows SDK.
 
 **Os binários do strongSwan em `vendor/windows/` não são assinados.** São
 terceiros (GPLv2) e selar com o certificado da DTIC deturparia a
-procedência. Enquanto o instalador não for distribuído nas releases, o fonte
-do strongSwan é fornecido sob demanda conforme o `SOURCE-OFFER.txt`; quando a
-distribuição começar, o tarball correspondente acompanha a release.
+procedência. Cada release publica o tarball do fonte do strongSwan junto do
+`.exe`, conforme o `SOURCE-OFFER.txt`.
 
-No CI, o job do Windows é experimental (`continue-on-error`) e **não** é
-publicado. A exigência de assinatura para release volta a valer quando o
-instalador passar a ser distribuído.
+O `.exe` distribuído também **não é assinado hoje**: é por isso que o
+SmartScreen avisa na primeira execução.
 
 Expectativa realista: mesmo com certificado novo, o SmartScreen pode avisar
 por um tempo, porque a reputação se constrói com volume de downloads.
@@ -217,9 +224,9 @@ python3 -m unittest discover -s tests -v
   você; o resultado aparece no log.
 - **Serviço `IKEEXT`:** é interrompido na instalação e reconferido a cada
   conexão, pois ocupa as portas UDP 500/4500. É restaurado na desinstalação.
-- **SmartScreen:** o instalador não é assinado digitalmente. O Windows pode
-  exibir aviso em *Mais informações → Executar assim mesmo*. A solução
-  definitiva é assinar com um certificado interno (`signtool`).
+- **SmartScreen:** o `.exe` não é assinado digitalmente. O Windows pode exibir
+  aviso em *Mais informações → Executar assim mesmo*. A solução definitiva é
+  assinar com um certificado interno (`signtool`).
 
 ## Diagnóstico de problemas
 
@@ -229,6 +236,7 @@ python3 -m unittest discover -s tests -v
 | "Conflito de portas IKE (`IKEEXT`)"  | `sc stop IKEEXT` (o app tenta automaticamente).   |
 | "Falha de autenticação"              | Usuário/senha, ou PSK incorreta.                  |
 | "Tempo esgotado"                     | Gateway inacessível ou UDP 500/4500 bloqueado.    |
+| Fica em "Conectando..." sem resposta alguma | Gateway vazio ou ainda com o IP de exemplo `198.51.100.100` (RFC 5737): confira o campo **Gateway** e o destino no `tcpdump`. |
 | "CHILD_SA config 'forticlient' not found" | O swanctl não encontrou o `conf.d` — ver abaixo. |
 | "A configuração não foi carregada no motor" | `--load-all` respondeu rc=0 sem carregar nada — veja o log do motor. |
 | Só conecta no PC onde foi configurado     | O IP local salvo era de outra máquina: limpe o campo **IP local** (o app volta a detectar e ignora endereço que não exista aqui). |
@@ -334,18 +342,20 @@ Sempre que possível, anexe o `.zip` gerado por **Exportar diagnóstico**.
 - `vpn_config.py`: credenciais (DPAPI no Windows), logging e diagnóstico.
 - `build/`: empacotamento (`build_deb.sh`, `build_windows.sh`,
   `build_strongswan_windows.sh`, `gen_build_info.py`, spec do PyInstaller, Inno Setup).
-- `vendor/windows/`: motor strongSwan para Windows (binários não versionados).
+- `vendor/windows/`: motor strongSwan para Windows (binários não versionados),
+  embutido no `.exe` pelo PyInstaller e extraído para
+  `%LOCALAPPDATA%\FortiClientVPN\engine` na primeira execução.
 - `tests/`: testes unitários.
-- `debian/`, `config/`, `assets/`: empacotamento Linux, exemplos e ícones.
+- `debian/`, `assets/`: empacotamento Linux e ícones.
 - `.github/workflows/build.yml`: testes, artefatos e publicação da release.
 
 ## Segurança e segredos
 
-`config/forti.conf` guarda o PSK e a senha do gateway reais. Ele **não** é
-versionado (ver `.gitignore`) e o CI falha se ele entrar no índice. Use
-`config/forti.conf.example` como modelo e preencha o arquivo local — ou,
-melhor ainda, digite as credenciais na interface, que as guarda protegidas
-(DPAPI no Windows, arquivo com `0600` no Linux).
+O aplicativo foi desenhado para que o próprio usuário preencha seus dados de
+conexão (Gateway, Chave PSK, Usuário e Senha) diretamente na interface gráfica,
+sem a necessidade de arquivos de exemplo ou credenciais pré-compiladas. As
+credenciais são armazenadas com proteção no computador do usuário (DPAPI no
+Windows, arquivo com `0600` no Linux).
 
 Se um segredo já entrou no histórico, `git log` ainda o mostra. Remover o arquivo
 do índice não basta: é preciso reescrever o histórico (`git filter-repo`) e
@@ -356,7 +366,7 @@ do índice não basta: é preciso reescrever o histórico (`git filter-repo`) e
 Este projeto é distribuído sob a **GNU GPLv3 ou superior** — ver
 [`LICENSE`](LICENSE). Copyright (C) 2026 Jeiel Miranda.
 
-O instalador do Windows distribui o motor **strongSwan** (GPLv2) como programa
+O executável do Windows distribui o motor **strongSwan** (GPLv2) como programa
 separado; cada release publica o tarball do fonte correspondente para cumprir a
 GPLv2. Ver [`NOTICE`](NOTICE) e [`SOURCE-OFFER.txt`](SOURCE-OFFER.txt).
 
